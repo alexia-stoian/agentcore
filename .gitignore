@@ -1,5 +1,6 @@
-# Throwaway UI preview mocks (not part of the deployed agent)
+# Throwaway UI preview mocks / local smoke tests (not part of the deployed agent)
 app/CareerGuide/mock/
+**/mock/
 
 # Python virtual environments & caches
 .venv/
