@@ -1,3 +1,23 @@
 {
-  "targets": {}
+  "targets": {
+    "default": {
+      "resources": {
+        "runtimes": {
+          "CareerGuide": {
+            "runtimeId": "demoAlexia_CareerGuide-uWzBUx4Fi8",
+            "runtimeArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:runtime/demoAlexia_CareerGuide-uWzBUx4Fi8",
+            "roleArn": "arn:aws:iam::416754239521:role/AgentCore-demoAlexia-defa-ApplicationAgentCareerGui-wkpJyYe584UD"
+          }
+        },
+        "memories": {
+          "CareerGuideMemory": {
+            "memoryId": "demoAlexia_CareerGuideMemory-oIm3AB2K63",
+            "memoryArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:memory/demoAlexia_CareerGuideMemory-oIm3AB2K63"
+          }
+        },
+        "stackName": "AgentCore-demoAlexia-default",
+        "deployHash": "8f11eb5ccabd3e62"
+      }
+    }
+  }
 }
