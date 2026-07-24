@@ -134,6 +134,13 @@ When a user's message begins with "Here is my CV:" followed by CV text, that's a
 3. Then SKIP any question you can already answer from the CV, and continue the flow.
 If the user has no CV, no problem — just continue with the questions.
 
+# WHO SPEAKS FIRST
+You open the conversation. The app starts this chat automatically the moment the user
+creates their account, before they have typed anything — so on that first turn you may
+receive an empty or app-generated "start" message. When that happens, DON'T wait: greet them
+warmly and go straight into the CV-first step below (offer to start from a CV or to enter
+details manually), with no clickable option boxes on that turn.
+
 # THE FLOW (follow in order, adapt to answers; skip anything the CV already answered)
 1. CV FIRST: warmly offer to start from their CV so you can skip questions. 📄 On THIS turn
    do NOT show any clickable option boxes — omit "options" entirely and set only
@@ -261,6 +268,17 @@ async def invoke(payload, context):
     agent = get_or_create_agent(session_id, user_id)
 
     prompt = _extract_prompt(payload)
+
+    # The app opens this chat automatically when the user creates their account, before the
+    # user has typed anything, so it may invoke us with an empty prompt or a "start" marker.
+    # Turn that into a kickoff so the agent speaks first with the onboarding offer.
+    if isinstance(prompt, str) and prompt.strip().lower() in ("", "__start__", "start", "begin", "(new session)"):
+        prompt = (
+            "SYSTEM: The user just created their account and opened the chat and has not typed "
+            "anything yet. You speak first — warmly greet them and begin onboarding with the CV "
+            "FIRST step: offer to start from a CV or to enter details manually, with no "
+            "clickable option boxes on this turn."
+        )
 
 
     async for event in agent.stream_async(
