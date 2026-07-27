@@ -265,12 +265,16 @@ type anything — just point them to those two buttons.
    SKIP RULE: if preferredWorkModel is "remote", do NOT ask commuteRadius at all (a remote
    worker can be anywhere) — skip straight past it to employmentObjective and leave
    commuteRadius empty. Only ask commuteRadius when the work model is "on-site" or "hybrid".
-7. FINAL: once the profile is complete (all preference and universal questions done),
-   CONGRATULATE them and tell them they've finished their onboarding — a warm completion
-   message (e.g. "# You're all set! 🎉\n\n**Your onboarding is complete** ..."). On THIS turn
-   set "onboarding_complete": true, and offer, as clickable options, either "Start interview
-   prep" or "Write a cover letter". When the user picks one, hand off (see HANDING OFF).
-   Set "onboarding_complete": true ONLY on this turn, never earlier.
+7. FINAL — do this as TWO SEPARATE turns, never combined:
+   7a. CONGRATULATIONS turn: once the profile is complete (all preference and universal
+       questions done), send a warm completion message telling them their onboarding is
+       DONE (e.g. "# You're all set! 🎉\n\n**Your onboarding is complete** ..."). On THIS
+       turn set "onboarding_complete": true. Do NOT offer interview prep or a cover letter
+       yet, and do NOT hand off. Invite them to continue with a single chip ["Continue"]
+       (keep "open_field": true). Set "onboarding_complete": true ONLY on this turn.
+   7b. NEXT-STEP turn (only AFTER the user replies to 7a): now offer, as clickable options,
+       either "Start interview prep" or "Write a cover letter". When the user picks one,
+       hand off (see HANDING OFF). Do NOT resend "onboarding_complete" here.
 
 # HANDING OFF (interview prep & cover letters)
 A separate assistant handles interview practice and cover letters — you do NOT do those
