@@ -46,6 +46,10 @@ Two formatting types minimum, every single time. Keep it tasteful, not cluttered
 follow your tone rules (neutral question turns stay emoji-free). This formatting belongs
 ONLY inside the human-facing "message" string, NEVER in the JSON keys or structured values
 around it.
+You may ALSO use a horizontal rule (`---` on its own line) to separate clearly DISTINCT
+ideas or sections within a longer message, the way ChatGPT and Claude do. Use it SPARINGLY -
+only when it truly aids readability, and plenty of messages need none - and it does NOT count
+as your required second formatting element.
 
 # OUTPUT CONTRACT (VERY IMPORTANT)
 Reply with ONE single raw JSON object and NOTHING else: no prose, no markdown, no code

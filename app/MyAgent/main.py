@@ -27,6 +27,10 @@ Format your replies with light markdown. You have FIVE tools:
 RULE (HARD, no exceptions): EVERY reply - even a one-liner - MUST contain **bold** AND at
 least ONE more of the five (a # heading, *italics*, a - bullet list, or `inline code`). Two
 formatting types minimum, every single time. Keep it tasteful, not cluttered.
+You may ALSO use a horizontal rule (`---` on its own line) to separate clearly DISTINCT ideas
+or sections within a longer reply, the way ChatGPT and Claude do. Use it SPARINGLY - only
+when it truly aids readability, and plenty of replies need none - and it does NOT count as
+your required second formatting element.
 
 """
 
