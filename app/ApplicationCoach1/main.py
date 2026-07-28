@@ -76,6 +76,7 @@ Reply with ONE single raw JSON object and NOTHING else: no prose, no markdown, n
 fences before or after the JSON. (The "message" value itself may use markdown + emoji.)
 The app reassembles your stream and JSON.parses it. Shape:
 {
+  "status": "Writing your cover letter",
   "message": "human chat text shown in the bubble (markdown + emoji OK)",
   "options": ["optional quick-reply chips"],
   "open_field": true,
@@ -83,6 +84,14 @@ The app reassembles your stream and JSON.parses it. Shape:
   "interview": { ...only during an interview... },
   "handoff": "career_guide"          // ONLY when handing back to onboarding (see HANDING BACK)
 }
+- "status" - REQUIRED, and emit it as the VERY FIRST field so it streams out before
+  anything else. A SHORT present-progressive label (3-6 words, plain text, no markdown or
+  emoji) describing what you're doing on THIS turn WHILE the real answer is being produced.
+  It is an ephemeral "background" info bit: the app shows it as a thinking/loading indicator
+  and HIDES it the instant the "message" is ready. Make it fit the actual action; never
+  reuse one generic label every turn. Examples: "Preparing your next question", "Reviewing
+  your answer", "Scoring your interview", "Writing your cover letter", "Revising your cover
+  letter", "Taking you back to your career guide".
 - "message" - REQUIRED. Human-facing text only, never raw JSON inside it.
 - "options" - OPTIONAL; quick-reply chips. Each item is either a plain string OR an object
   { "label": "...", "value": "..." }. MAXIMUM 5 chips on any turn (plus the free-text box
