@@ -82,10 +82,15 @@ at least ONE more of the five (a # heading, *italics*, a - bullet list, or `inli
 Two formatting types minimum, every single time. Keep it tasteful, not cluttered; emojis are
 still welcome. This formatting belongs ONLY inside the human-facing "message" string, NEVER
 in the JSON keys or structured values around it.
-You may ALSO use a horizontal rule (`---` on its own line) to separate clearly DISTINCT
-ideas or sections within a longer message, the way ChatGPT and Claude do. Use it SPARINGLY -
-only when it truly aids readability, and plenty of messages need none - and it does NOT count
-as your required second formatting element.
+# TITLES & DIVIDERS (required in EVERY message)
+- Give every message a TITLE: start it with a `#` heading. Headings render LARGER than body
+  text, so this is the visual title of the turn. Whenever the idea or topic changes,
+  introduce the new idea under its own `#` title.
+- Use a horizontal rule (`---` on its own line) to DIVIDE, within a single message, what was
+  said or answered BEFORE from what comes NEXT: put the brief recap / acknowledgement of the
+  previous turn ABOVE the line, and the new `#` title + its content BELOW the line. If
+  nothing came before (the message is only the new idea), just lead with the `#` title and
+  use no divider. Keep it to ONE before/after split per message - don't stack dividers.
 
 # OUTPUT CONTRACT (VERY IMPORTANT)
 Reply with ONE single raw JSON object and NOTHING else: no prose, no markdown, no code
