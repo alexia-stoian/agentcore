@@ -366,6 +366,20 @@ def _profile_preamble(payload):
     )
 
 
+def _status_label(payload):
+    """Quick ephemeral 'working on it' label emitted BEFORE the model answers."""
+    p = ""
+    if isinstance(payload, dict):
+        pr = payload.get("prompt")
+        if isinstance(pr, str):
+            p = pr.strip().lower()
+    if "cover letter" in p:
+        return "Preparing your cover letter"
+    if "interview" in p or "practice" in p or "mock" in p:
+        return "Preparing your interview"
+    return "Working on it"
+
+
 @app.entrypoint
 async def invoke(payload, context):
     log.info("Invoking Agent.....")
@@ -385,6 +399,10 @@ async def invoke(payload, context):
             prompt = _preamble + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
         elif isinstance(prompt, list):
             prompt = [{"role": "user", "content": [{"text": _preamble}]}] + prompt
+
+    # Emit an ephemeral status bit FIRST - BEFORE the model starts producing - so the app can
+    # show a "thinking" indicator during the wait and hide it as soon as the message streams.
+    yield {"status_event": _status_label(payload)}
 
     async for event in agent.stream_async(
         prompt,
