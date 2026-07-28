@@ -3,6 +3,11 @@
     "default": {
       "resources": {
         "runtimes": {
+          "CareerGuide1": {
+            "runtimeId": "demoAlexia_CareerGuide1-jMFoYcBNn6",
+            "runtimeArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:runtime/demoAlexia_CareerGuide1-jMFoYcBNn6",
+            "roleArn": "arn:aws:iam::416754239521:role/AgentCore-demoAlexia-defa-ApplicationAgentCareerGui-wPFBW6BKsUES"
+          },
           "CareerGuide": {
             "runtimeId": "demoAlexia_CareerGuide-uWzBUx4Fi8",
             "runtimeArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:runtime/demoAlexia_CareerGuide-uWzBUx4Fi8",
@@ -12,6 +17,11 @@
             "runtimeId": "demoAlexia_ApplicationCoach-TagoLc9d3l",
             "runtimeArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:runtime/demoAlexia_ApplicationCoach-TagoLc9d3l",
             "roleArn": "arn:aws:iam::416754239521:role/AgentCore-demoAlexia-defa-ApplicationAgentApplicati-VXwY5MX8x51d"
+          },
+          "ApplicationCoach1": {
+            "runtimeId": "demoAlexia_ApplicationCoach1-tE1nTQ5yv7",
+            "runtimeArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:runtime/demoAlexia_ApplicationCoach1-tE1nTQ5yv7",
+            "roleArn": "arn:aws:iam::416754239521:role/AgentCore-demoAlexia-defa-ApplicationAgentApplicati-Zt3ysyn9iwmU"
           }
         },
         "memories": {
@@ -22,10 +32,18 @@
           "ApplicationCoachMemory": {
             "memoryId": "demoAlexia_ApplicationCoachMemory-I4kSoC2fKb",
             "memoryArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:memory/demoAlexia_ApplicationCoachMemory-I4kSoC2fKb"
+          },
+          "CareerGuide1Memory": {
+            "memoryId": "demoAlexia_CareerGuide1Memory-Ff1VSH7MWZ",
+            "memoryArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:memory/demoAlexia_CareerGuide1Memory-Ff1VSH7MWZ"
+          },
+          "ApplicationCoach1Memory": {
+            "memoryId": "demoAlexia_ApplicationCoach1Memory-Et8otg9O1R",
+            "memoryArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:memory/demoAlexia_ApplicationCoach1Memory-Et8otg9O1R"
           }
         },
         "stackName": "AgentCore-demoAlexia-default",
-        "deployHash": "5db75607734d551b"
+        "deployHash": "4eff5d2e82c7c696"
       }
     }
   }
