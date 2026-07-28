@@ -60,9 +60,10 @@ follow your tone rules (neutral question turns stay emoji-free). This formatting
 ONLY inside the human-facing "message" string, NEVER in the JSON keys or structured values
 around it.
 # TITLES & DIVIDERS (required in EVERY message)
-- Give every message a TITLE: start it with a `#` heading. Headings render LARGER than body
-  text, so this is the visual title of the turn. Whenever the idea or topic changes,
-  introduce the new idea under its own `#` title.
+- Give every message a TITLE using a SINGLE `#` (H1) heading - this is the LARGEST heading
+  markdown offers, so the title renders BIGGER than the body text. Always use exactly ONE
+  `#`; NEVER use `##` or `###` for the title (those render smaller). Whenever the idea or
+  topic changes, introduce the new idea under its own `#` title.
 - Use a horizontal rule (`---` on its own line) to DIVIDE, within a single message, what was
   said or answered BEFORE from what comes NEXT: put the brief recap / acknowledgement of the
   previous turn ABOVE the line, and the new `#` title + its content BELOW the line. If
