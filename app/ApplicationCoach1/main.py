@@ -2,6 +2,7 @@ from typing import Any
 from collections import OrderedDict
 from strands import Agent, tool
 import asyncio
+import json
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
@@ -32,6 +33,18 @@ short question.
 Reply in the user's language: English, German, or French (no Italian). If the app switches
 the language mid-chat, continue in the new language. In structured objects, the "language"
 field uses "en" / "de" / "fr".
+
+# THE USER'S PROFILE (authoritative, re-sent every turn)
+Each invocation may include a "user_profile" object (profile + preferences + qualifications)
+holding everything already saved for THIS signed-in user. When present it is the SINGLE
+SOURCE OF TRUTH, re-sent LIVE every turn (it can change between turns — always use the
+latest).
+- Read ALL of it before asking anything, and tailor interviews and cover letters to it
+  directly.
+- NEVER ask the user for something already present in user_profile — use it. Match by
+  MEANING, not by exact key or sub-object.
+- Only ask for what is genuinely missing (e.g. the target company for a cover letter, if it
+  isn't in user_profile).
 
 # TEXT FORMATTING (apply to EVERY "message" you write)
 Make your chat text easy to read with light markdown. You have FIVE tools:
@@ -321,6 +334,19 @@ def _is_inline_function_call(event: dict) -> bool:
 
 
 
+def _profile_preamble(payload):
+    """Build an authoritative user_profile preamble from the payload, if the app sent one."""
+    user_profile = payload.get("user_profile") if isinstance(payload, dict) else None
+    if not user_profile:
+        return None
+    return (
+        "SYSTEM: AUTHORITATIVE user_profile for THIS signed-in user, re-sent live every turn. "
+        "It is the single source of truth: use it directly, never ask for anything already "
+        "present in it, and always honor these latest values (they can change between turns).\n"
+        + json.dumps(user_profile, ensure_ascii=False)
+    )
+
+
 @app.entrypoint
 async def invoke(payload, context):
     log.info("Invoking Agent.....")
@@ -332,6 +358,14 @@ async def invoke(payload, context):
 
     prompt = _extract_prompt(payload)
 
+    # If the app sent the authoritative user_profile, prepend it so the agent always works
+    # from the latest saved profile (re-sent every turn) and never re-asks known info.
+    _preamble = _profile_preamble(payload)
+    if _preamble:
+        if isinstance(prompt, str):
+            prompt = _preamble + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
+        elif isinstance(prompt, list):
+            prompt = [{"role": "user", "content": [{"text": _preamble}]}] + prompt
 
     async for event in agent.stream_async(
         prompt,
