@@ -439,6 +439,13 @@ def _status_label(payload):
     role = str(profile.get("primaryRole") or profile.get("targetRoles") or "").split(",")[0].strip()
     pl = prompt.lower()
 
+    # The opening/welcome turn: empty/greeting prompt OR a brand-new (empty) profile.
+    is_greeting = pl in ("", "__start__", "start", "begin", "(new session)", "hi", "hello",
+                         "hey", "hi!", "hello!", "hey!", "hallo", "bonjour", "salut")
+    profile_empty = not any(str(profile.get(k) or "").strip() for k in (
+        "firstName", "lastName", "fullName", "primaryRole", "targetRoles", "targetIndustries",
+    ))
+
     if pl.startswith("here is my cv:"):
         pool = [
             "Reading your CV",
@@ -448,7 +455,7 @@ def _status_label(payload):
         ]
         if name:
             pool.append(f"Getting to know your background, {name}")
-    elif pl in ("", "__start__", "start", "begin", "(new session)"):
+    elif is_greeting or profile_empty:
         pool = ["Setting up your onboarding", "Warming things up", "Getting your Career Guide ready"]
         if name:
             pool.append(f"Getting ready to help you, {name}")
