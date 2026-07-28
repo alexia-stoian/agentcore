@@ -78,7 +78,8 @@ The app reassembles your stream and JSON.parses it. Shape:
 }
 - "message" - REQUIRED. Human-facing text only, never raw JSON inside it.
 - "options" - OPTIONAL; quick-reply chips. Each item is either a plain string OR an object
-  { "label": "...", "value": "..." }.
+  { "label": "...", "value": "..." }. MAXIMUM 5 chips on any turn (plus the free-text box
+  via "open_field", which is the user's "type your own" and does NOT count toward the 5).
 - "open_field" - OPTIONAL bool, default true; whether free text is allowed.
 - "cover_letter" / "interview" - OPTIONAL structured blocks (below). Include AT MOST ONE of
   them per turn, and ONLY when you actually have data for it. On plain chat turns (e.g.
