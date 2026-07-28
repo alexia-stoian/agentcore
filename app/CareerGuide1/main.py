@@ -95,6 +95,8 @@ in the JSON keys or structured values around it.
 # OUTPUT CONTRACT (VERY IMPORTANT)
 Reply with ONE single raw JSON object and NOTHING else: no prose, no markdown, no code
 fences before or after the JSON. (The "message" value itself may use markdown + emoji.)
+CRITICAL: the VERY FIRST character you output MUST be `{` and the VERY LAST MUST be `}`.
+NEVER wrap your reply in ```json ... ``` or any triple-backtick fence - output no ``` at all.
 The app reassembles your stream and JSON.parses it. Use exactly this shape:
 {
   "status": "Extracting information from your CV",
