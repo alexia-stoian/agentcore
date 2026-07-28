@@ -3,6 +3,7 @@ from collections import OrderedDict
 from strands import Agent, tool
 import asyncio
 import json
+import random
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
@@ -421,17 +422,47 @@ def _profile_preamble(payload):
 
 
 def _status_label(payload):
-    """Quick ephemeral 'working on it' label emitted BEFORE the model answers."""
-    p = ""
+    """Personalized, varied ephemeral label emitted BEFORE the model answers.
+
+    Built from the payload (prompt intent + user_profile) so it reflects what the agent is
+    about to do and never repeats the same line every turn.
+    """
+    prompt = ""
+    profile = {}
     if isinstance(payload, dict):
         pr = payload.get("prompt")
         if isinstance(pr, str):
-            p = pr.strip().lower()
-    if p.startswith("here is my cv:"):
-        return "Extracting information from your CV"
-    if p in ("", "__start__", "start", "begin", "(new session)"):
-        return "Getting your onboarding started"
-    return "Adding to your profile"
+            prompt = pr.strip()
+        up = payload.get("user_profile") if isinstance(payload.get("user_profile"), dict) else {}
+        profile = up.get("profile") if isinstance(up.get("profile"), dict) else {}
+    name = (str(profile.get("firstName") or profile.get("fullName") or "").split(" ")[0]).strip()
+    role = str(profile.get("primaryRole") or profile.get("targetRoles") or "").split(",")[0].strip()
+    pl = prompt.lower()
+
+    if pl.startswith("here is my cv:"):
+        pool = [
+            "Reading your CV",
+            "Pulling your experience from your CV",
+            "Extracting your skills and roles",
+            "Scanning your CV for the highlights",
+        ]
+        if name:
+            pool.append(f"Getting to know your background, {name}")
+    elif pl in ("", "__start__", "start", "begin", "(new session)"):
+        pool = ["Setting up your onboarding", "Warming things up", "Getting your Career Guide ready"]
+        if name:
+            pool.append(f"Getting ready to help you, {name}")
+    else:
+        pool = [
+            "Saving that to your Profile",
+            "Updating your Profile",
+            "Noting your answer",
+            "Popping that onto your Profile",
+            "Locking that in",
+        ]
+        if role:
+            pool.append(f"Tuning your {role} profile")
+    return random.choice(pool)
 
 
 @app.entrypoint

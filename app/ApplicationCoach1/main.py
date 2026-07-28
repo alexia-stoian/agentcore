@@ -3,6 +3,7 @@ from collections import OrderedDict
 from strands import Agent, tool
 import asyncio
 import json
+import random
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
@@ -367,17 +368,49 @@ def _profile_preamble(payload):
 
 
 def _status_label(payload):
-    """Quick ephemeral 'working on it' label emitted BEFORE the model answers."""
-    p = ""
+    """Personalized, varied ephemeral label emitted BEFORE the model answers.
+
+    Built from the payload (prompt intent + user_profile) so it reflects what the agent is
+    about to do and never repeats the same line every turn.
+    """
+    prompt = ""
+    profile = {}
     if isinstance(payload, dict):
         pr = payload.get("prompt")
         if isinstance(pr, str):
-            p = pr.strip().lower()
-    if "cover letter" in p:
-        return "Preparing your cover letter"
-    if "interview" in p or "practice" in p or "mock" in p:
-        return "Preparing your interview"
-    return "Working on it"
+            prompt = pr.strip()
+        up = payload.get("user_profile") if isinstance(payload.get("user_profile"), dict) else {}
+        profile = up.get("profile") if isinstance(up.get("profile"), dict) else {}
+    role = str(profile.get("primaryRole") or profile.get("targetRoles") or "").split(",")[0].strip()
+    pl = prompt.lower()
+
+    if "cover letter" in pl:
+        pool = [
+            "Drafting your cover letter",
+            "Writing your cover letter",
+            "Putting your cover letter together",
+            "Tailoring your cover letter",
+        ]
+        if role:
+            pool.append(f"Writing your {role} cover letter")
+    elif "interview" in pl or "practice" in pl or "mock" in pl:
+        pool = [
+            "Preparing your interview",
+            "Lining up your questions",
+            "Setting up your mock interview",
+            "Getting your first question ready",
+        ]
+        if role:
+            pool.append(f"Prepping your {role} interview")
+    else:
+        pool = [
+            "Putting that together",
+            "Working on your response",
+            "Lining up what's next",
+            "On it",
+            "One moment",
+        ]
+    return random.choice(pool)
 
 
 @app.entrypoint
