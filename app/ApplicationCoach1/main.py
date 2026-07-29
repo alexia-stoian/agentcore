@@ -3,6 +3,7 @@ from collections import OrderedDict
 from strands import Agent, tool
 import asyncio
 import json
+import random
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
@@ -45,6 +46,13 @@ latest).
   MEANING, not by exact key or sub-object.
 - Only ask for what is genuinely missing (e.g. the target company for a cover letter, if it
   isn't in user_profile).
+- The "qualifications" block holds the user's experience, education, languages, skills AND
+  "certifications" — an array of certification objects (certificates, licenses, credentials).
+  Each has optional string fields: "name", "issuer", "issueDate", "expiryDate",
+  "credentialId", "url". Treat certifications as first-class evidence of the user's
+  qualifications: weave relevant ones into interview questions/feedback and into cover
+  letters (e.g. cite a `AWS Certified Solutions Architect` credential when it strengthens
+  the case). Never invent a certification the user doesn't have.
 
 # TEXT FORMATTING (apply to EVERY "message" you write)
 Make your chat text easy to read with light markdown. You have FIVE tools:
@@ -74,8 +82,11 @@ around it.
 # OUTPUT CONTRACT (VERY IMPORTANT)
 Reply with ONE single raw JSON object and NOTHING else: no prose, no markdown, no code
 fences before or after the JSON. (The "message" value itself may use markdown + emoji.)
+CRITICAL: the VERY FIRST character you output MUST be `{` and the VERY LAST MUST be `}`.
+NEVER wrap your reply in ```json ... ``` or any triple-backtick fence - output no ``` at all.
 The app reassembles your stream and JSON.parses it. Shape:
 {
+  "status": "Writing your cover letter",
   "message": "human chat text shown in the bubble (markdown + emoji OK)",
   "options": ["optional quick-reply chips"],
   "open_field": true,
@@ -83,6 +94,14 @@ The app reassembles your stream and JSON.parses it. Shape:
   "interview": { ...only during an interview... },
   "handoff": "career_guide"          // ONLY when handing back to onboarding (see HANDING BACK)
 }
+- "status" - REQUIRED, and emit it as the VERY FIRST field so it streams out before
+  anything else. A SHORT present-progressive label (3-6 words, plain text, no markdown or
+  emoji) describing what you're doing on THIS turn WHILE the real answer is being produced.
+  It is an ephemeral "background" info bit: the app shows it as a thinking/loading indicator
+  and HIDES it the instant the "message" is ready. Make it fit the actual action; never
+  reuse one generic label every turn. Examples: "Preparing your next question", "Reviewing
+  your answer", "Scoring your interview", "Writing your cover letter", "Revising your cover
+  letter", "Taking you back to your career guide".
 - "message" - REQUIRED. Human-facing text only, never raw JSON inside it.
 - "options" - OPTIONAL; quick-reply chips. Each item is either a plain string OR an object
   { "label": "...", "value": "..." }. MAXIMUM 5 chips on any turn (plus the free-text box
@@ -139,8 +158,8 @@ If you're genuinely unsure whether it's off-topic, ask ONE short clarifying ques
 # INTERVIEW MODE
 ########################################################################################
 Run a realistic mock interview tailored EXACTLY to this user's Profile - their target role,
-seniority, industry, skills, and actual experience. Questions must be pertinent to what they
-have done and what they want. The interview is 3 questions by default. Before EACH question,
+seniority, industry, skills, certifications, and actual experience. Questions must be
+pertinent to what they have done and what they want. The interview is 3 questions by default. Before EACH question,
 the user picks what TYPE of question they want next - so every question's type is chosen by
 the user, and different questions may be different types.
 
@@ -230,8 +249,8 @@ start -> [type choice] -> question(1) -> [user answers] -> feedback(1)+[type cho
 ########################################################################################
 Write a tailored, Swiss-appropriate cover letter using the user's Profile/CV plus the job
 they name. Gather what you need: job title, company, the job description/requirements (or a
-URL), the candidate's relevant experience/skills (from their Profile/CV), desired tone, and
-language.
+URL), the candidate's relevant experience/skills/certifications (from their Profile/CV),
+desired tone, and language.
 
 ## Handling missing info
 - If the user gives a role/company/posting, tailor tightly to it.
@@ -355,6 +374,52 @@ def _profile_preamble(payload):
     )
 
 
+def _status_label(payload):
+    """Personalized, varied ephemeral label emitted BEFORE the model answers.
+
+    Built from the payload (prompt intent + user_profile) so it reflects what the agent is
+    about to do and never repeats the same line every turn.
+    """
+    prompt = ""
+    profile = {}
+    if isinstance(payload, dict):
+        pr = payload.get("prompt")
+        if isinstance(pr, str):
+            prompt = pr.strip()
+        up = payload.get("user_profile") if isinstance(payload.get("user_profile"), dict) else {}
+        profile = up.get("profile") if isinstance(up.get("profile"), dict) else {}
+    role = str(profile.get("primaryRole") or profile.get("targetRoles") or "").split(",")[0].strip()
+    pl = prompt.lower()
+
+    if "cover letter" in pl:
+        pool = [
+            "Drafting your cover letter",
+            "Writing your cover letter",
+            "Putting your cover letter together",
+            "Tailoring your cover letter",
+        ]
+        if role:
+            pool.append(f"Writing your {role} cover letter")
+    elif "interview" in pl or "practice" in pl or "mock" in pl:
+        pool = [
+            "Preparing your interview",
+            "Lining up your questions",
+            "Setting up your mock interview",
+            "Getting your first question ready",
+        ]
+        if role:
+            pool.append(f"Prepping your {role} interview")
+    else:
+        pool = [
+            "Putting that together",
+            "Working on your response",
+            "Lining up what's next",
+            "On it",
+            "One moment",
+        ]
+    return random.choice(pool)
+
+
 @app.entrypoint
 async def invoke(payload, context):
     log.info("Invoking Agent.....")
@@ -374,6 +439,10 @@ async def invoke(payload, context):
             prompt = _preamble + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
         elif isinstance(prompt, list):
             prompt = [{"role": "user", "content": [{"text": _preamble}]}] + prompt
+
+    # Emit an ephemeral status bit FIRST - BEFORE the model starts producing - so the app can
+    # show a "thinking" indicator during the wait and hide it as soon as the message streams.
+    yield {"status_event": _status_label(payload)}
 
     async for event in agent.stream_async(
         prompt,
