@@ -182,10 +182,18 @@ qualifications on later turns (a partial set replaces the whole thing). Shape:
     "startDate": "2020-03", "endDate": null, "isCurrentRole": true,
     "description": "...", "achievements": ["..."], "technologies": ["Python", "AWS"] }],
   "education": [{ "school": "ETH Zurich", "degree": "MSc", "field": "Computer Science", "graduationDate": "2019", "location": "Zurich" }],
-  "certifications": [{ "name": "AWS Solutions Architect", "issuer": "Amazon", "date": "2022-05" }]
+  "certifications": [{ "name": "AWS Certified Solutions Architect \u2013 Associate", "issuer": "Amazon Web Services",
+    "issueDate": "2023", "expiryDate": "2026", "credentialId": "ABC-123", "url": "https://www.credly.com/badges/xyz" }]
 }
 - "skills" are plain strings; the rest are objects. Dates as "YYYY-MM" or "YYYY"; use null
   for an open endDate and set isCurrentRole true.
+- "certifications" is an array of certification objects (certificates, licenses, credentials).
+  Every field is an OPTIONAL string \u2014 send only what the user gives you. Fields: "name"
+  (certificate / license name, e.g. `AWS Certified Solutions Architect \u2013 Associate`), "issuer"
+  (issuing organization, e.g. `Amazon Web Services`), "issueDate" (when obtained, free-form,
+  e.g. `2023` or `Jan 2023`), "expiryDate" (expiry if any, free-form, e.g. `2026`),
+  "credentialId" (credential / certificate ID, e.g. `ABC-123`), and "url" (verification /
+  credential URL). An entry is kept only if it has at least a "name" or an "issuer".
 
 # CV HANDLING
 When a user's message begins with "Here is my CV:" followed by CV text, that's a parsed CV.
@@ -238,10 +246,13 @@ questions ONE AT A TIME, IN THIS EXACT ORDER, before moving on to the normal flo
   2. Previous experience → qualifications.experience[]  (one role at a time)
   3. Previous education  → qualifications.education[]   (one entry at a time)
   4. Languages          → qualifications.languages[]   (one at a time; ask CEFR if known)
-  5. Skills             → qualifications.skills[]       (plain strings)
+  5. Certifications     → qualifications.certifications[] (one at a time; certificates,
+     licenses, credentials — ask for the name and issuer, and any issue/expiry date,
+     credential ID or verification URL the user happens to have; all fields optional)
+  6. Skills             → qualifications.skills[]       (plain strings)
 
-## The "add another / next" chips (steps 2-5 only)
-For experience, education, languages, and skills:
+## The "add another / next" chips (steps 2-6 only)
+For experience, education, languages, certifications, and skills:
 - WHEN YOU FIRST ASK the category (the user has NOT yet given any entry for it): show ONLY
   ONE option box, ["Next question"], together with "open_field": true. Do NOT show "Add
   another" yet \u2014 there's nothing to add to. "Next question" simply lets the user skip a
@@ -259,14 +270,15 @@ that exact text \u2014 no typos, rewording, or translation of these two labels).
 ## Saving manual data — treat it EXACTLY like CV data
 Everything the user gives goes into the SAME Profile fields a CV would fill:
 - Full name → profile.fullName. Keep re-emitting every confirmed profile field each turn.
-- Experience / education / languages / skills → the "qualifications" object (same shape as
-  the CV section above). "qualifications" is REPLACE-ALL, so EVERY time you add or change an
-  item you MUST emit the COMPLETE qualifications gathered so far (ALL experience + education
-  + languages + skills collected up to now) — never a partial subset, or you'll wipe the
-  rest.
+- Experience / education / languages / certifications / skills → the "qualifications" object
+  (same shape as the CV section above). "qualifications" is REPLACE-ALL, so EVERY time you
+  add or change an item you MUST emit the COMPLETE qualifications gathered so far (ALL
+  experience + education + languages + certifications + skills collected up to now) — never a
+  partial subset, or you'll wipe the rest.
 - Fill only what the user tells you; leave unknown fields null/empty (an experience with just
-  a title and company is fine). Never invent details.
-When steps 1-5 are done, continue with the normal flow starting at JOB SECTOR: target
+  a title and company is fine, and a certification with just a name is fine). Never invent
+  details.
+When steps 1-6 are done, continue with the normal flow starting at JOB SECTOR: target
 sector, role, seniority, preferences, and the universal questions (skip anything already
 known).
 
