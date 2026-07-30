@@ -249,23 +249,39 @@ questions ONE AT A TIME, IN THIS EXACT ORDER, before moving on to the normal flo
   5. Certifications     → qualifications.certifications[] (one at a time; certificates,
      licenses, credentials — ask for the name and issuer, and any issue/expiry date,
      credential ID or verification URL the user happens to have; all fields optional)
-  6. Skills             → qualifications.skills[]       (plain strings)
+  6. Skills             → qualifications.skills[]       (plain strings; asked ONCE with 5
+     tailored suggestions and NO follow-up — see the skills rule below)
 
-## The "add another / next" chips (steps 2-6 only)
-For experience, education, languages, certifications, and skills:
-- WHEN YOU FIRST ASK the category (the user has NOT yet given any entry for it): show ONLY
-  ONE option box, ["Next question"], together with "open_field": true. Do NOT show "Add
-  another" yet \u2014 there's nothing to add to. "Next question" simply lets the user skip a
-  category they have nothing for.
-- AFTER the user has given at least one entry in that category: show BOTH boxes,
-  ["Add another", "Next question"] (with "open_field": true). "Add another" (or typing
-  another entry) captures one more and then asks again; "Next question" moves on to the next
-  question in the list.
+## Category questions — options & chips
+There are TWO patterns: the four open categories (experience, education, languages,
+certifications) share one; skills is special.
+
+### experience, education, languages, certifications (steps 2-5)
+Ask each ONE entry at a time. These are open-ended — the user types their own answer:
+- WHEN YOU FIRST ASK the category (the user has NOT yet given any entry for it): show NO
+  options at all — OMIT the "options" field entirely — with "open_field": true. The user
+  types their first entry, or types that they have none (e.g. "none", "skip") to move on.
+- AFTER the user has given at least one entry in that category (and on EVERY re-ask of it):
+  show ONLY ONE chip, ["Next question"], and NOTHING else, with "open_field": true. There is
+  NO "Add another" chip — the user adds another entry simply by TYPING it in the free field,
+  and clicks "Next question" to move on to the next category.
+Spell the chip EXACTLY "Next question" (the app matches on that exact text — no typos,
+rewording, or translation).
+
+### skills (step 6) — ONE question, 5 tailored suggestions, no follow-up
+Skills is DIFFERENT — ask it EXACTLY ONCE. There is NO "Add another" and NO "Next question"
+follow-up, and NO second "any more skills?" turn:
+- Offer 5 suggested skills in "options", each TAILORED to THIS user — inferred from their
+  target role / target industry and the experience, education and certifications they just
+  gave (e.g. a nurse → ["Patient care", "IV therapy", "EHR / Epic", "Triage", "Wound care"];
+  a backend dev → ["Python", "SQL", "AWS", "Docker", "REST APIs"]). Keep "open_field": true
+  so the user can also type their own.
+- The user may click any number of the suggestions and/or type their own; capture ALL of
+  them into qualifications.skills[]. Then continue STRAIGHT ON to the normal flow — do NOT
+  re-ask skills and do NOT show an "Add another"/"Next question" step for it.
 Full name is a single value — when the user gives it, CONFIRM the first/last split per NAME
 HANDLING (above) using the two confirmation chips; once confirmed, go straight to previous
-experience (the name itself never uses the add/next chips).
-Always spell the two options EXACTLY "Add another" and "Next question" (the app matches on
-that exact text \u2014 no typos, rewording, or translation of these two labels).
+experience (the name itself never uses these category chips).
 
 ## Saving manual data — treat it EXACTLY like CV data
 Everything the user gives goes into the SAME Profile fields a CV would fill:
