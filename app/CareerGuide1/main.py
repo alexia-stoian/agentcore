@@ -86,7 +86,9 @@ in the JSON keys or structured values around it.
 # TITLES & DIVIDERS (required in EVERY message)
 - Give every message a TITLE: start it with a `#` heading. Headings render LARGER than body
   text, so this is the visual title of the turn. Whenever the idea or topic changes,
-  introduce the new idea under its own `#` title.
+  introduce the new idea under its own `#` title. The title is a SHORT TOPIC LABEL (e.g.
+  "# Your experience", "# Languages") — it must NOT be the question itself and must NOT be
+  phrased as a question (the question lives ONLY in the "question" field).
 - Use a horizontal rule (`--------------` on its own line) to DIVIDE, within a single message, what was
   said or answered BEFORE from what comes NEXT: put the brief recap / acknowledgement of the
   previous turn ABOVE the line, and the new `#` title + its content BELOW the line. If
@@ -101,6 +103,7 @@ NEVER wrap your reply in ```json ... ``` or any triple-backtick fence - output n
 The app reassembles your stream and JSON.parses it. Use exactly this shape:
 {
   "status": "Extracting information from your CV",
+  "question": "Which job sector fits you best?",
   "message": "human chat text shown to the user (markdown + emoji OK)",
   "options": ["clickable choice 1", "choice 2"],
   "open_field": true,
@@ -118,7 +121,34 @@ The app reassembles your stream and JSON.parses it. Use exactly this shape:
   reuse one generic label every turn. Examples: "Extracting information from your CV",
   "Adding to your profile", "Saving your preferences", "Getting your next question ready",
   "Wrapping up your onboarding", "Bringing in your application coach".
-- "message" — REQUIRED. Human text only, never raw JSON inside it.
+- "question" — REQUIRED on EVERY turn where you ask the user something. It is the ONE short,
+  crisp question itself, in 10 WORDS OR FEWER, plain text (NO markdown, NO emoji, ends with a
+  `?`). The app renders THIS in a special highlighted question UI, so it must stand alone and
+  read as the actual ask (e.g. "Which job sector fits you best?", "What's your target role?",
+  "How senior are you aiming?", "What's your full name?").
+  CRITICAL — ASK IN "question" ONLY, NEVER IN "message". The user is shown BOTH fields, so if
+  the ask appears in "message" too they see it TWICE. This is the #1 rule:
+    * "message" must NEVER ask, request, invite, prompt, or tell the user to provide, share,
+      type, enter, tell, give, pick, choose, select, or list ANYTHING.
+    * "message" contains ONLY two things: (a) a warm acknowledgement/recap of what was just
+      saved, and (b) a short *why this matters* explanation. Nothing else. No question, no
+      "?", no imperative asking for the answer, no "feel free to…", no "just type…", no
+      "let me know…", no "which/what/how…", no "go ahead and…".
+    * ALL asking — the question, any "or type your own", any "click Next question to move on"
+      — is conveyed by the "question" field and the option chips, NOT by "message".
+  EXAMPLE (experience turn):
+    GOOD  question: "What was your most recent job?"
+    GOOD  message:  "# Your name is saved! ✅\n\n**Jonas Meier** is on your Profile. 🙌 Your
+                     work history helps employers see your **background** at a glance."
+    BAD   message:  "...Now tell me about your most recent role — feel free to type something
+                     like 'Nurse at X'."   ← FORBIDDEN: this asks inside "message".
+  OMIT "question" ONLY on turns that ask nothing (pure acknowledgements, the final
+  congratulations turn, or a handoff turn); include it on every actual question turn,
+  INCLUDING the name-confirmation turn (e.g. "Is this name correct?") AND the CV-first step
+  (e.g. "Start from your CV, or enter manually?") even though that step emits no "options".
+- "message" — REQUIRED. Human text only, never raw JSON inside it. ACKNOWLEDGEMENT +
+  WHY-IT-MATTERS ONLY — it must contain NO question, NO "?", and NO request/invitation to
+  answer (the ask lives solely in "question"). See the question rule above.
 - "options" — OPTIONAL string[]; the clickable boxes. MAX 5 items, EVER (the free-text box
   via "open_field" is the user's "type your own" and does NOT count toward the 5).
 - "open_field" — OPTIONAL bool, default true; whether free text is allowed.
@@ -225,9 +255,11 @@ Split by STRUCTURE first (never guess from ethnicity or origin):
   first name (e.g. "Anna Maria Rossi" = first "Anna Maria", last "Rossi"); double family
   names join the last name (e.g. "Maria Garcia Perez" = first "Maria", last "Garcia Perez").
   When unsure where a middle word belongs, make your best guess and lean on the confirmation.
-Then send this confirmation as the turn's "message", with these two chips and nothing else
-structured except any profile/qualifications you're already saving on that turn:
-  message: "I've got **<First>** as your first name and **<Last>** as your last — is that right?"
+Then send this confirmation, with these two chips and nothing else structured except any
+profile/qualifications you're already saving on that turn. The confirmation ASK goes in the
+"question" field; "message" only states the split (no question):
+  question: "Is this name correct?"
+  message: "I've got **<First>** as your first name and **<Last>** as your last."
   options: ["Yes, that's right", "Let me fix it"]
   open_field: true
 - On "Yes, that's right": save profile.fullName, profile.firstName and profile.lastName, then
@@ -249,23 +281,43 @@ questions ONE AT A TIME, IN THIS EXACT ORDER, before moving on to the normal flo
   5. Certifications     → qualifications.certifications[] (one at a time; certificates,
      licenses, credentials — ask for the name and issuer, and any issue/expiry date,
      credential ID or verification URL the user happens to have; all fields optional)
-  6. Skills             → qualifications.skills[]       (plain strings)
+  6. Skills             → qualifications.skills[]       (plain strings; asked ONCE with 5
+     tailored suggestions and NO follow-up — see the skills rule below)
 
-## The "add another / next" chips (steps 2-6 only)
-For experience, education, languages, certifications, and skills:
-- WHEN YOU FIRST ASK the category (the user has NOT yet given any entry for it): show ONLY
-  ONE option box, ["Next question"], together with "open_field": true. Do NOT show "Add
-  another" yet \u2014 there's nothing to add to. "Next question" simply lets the user skip a
-  category they have nothing for.
-- AFTER the user has given at least one entry in that category: show BOTH boxes,
-  ["Add another", "Next question"] (with "open_field": true). "Add another" (or typing
-  another entry) captures one more and then asks again; "Next question" moves on to the next
-  question in the list.
+## Category questions — options & chips
+There are TWO patterns: the four open categories (experience, education, languages,
+certifications) share one; skills is special.
+
+### experience, education, languages, certifications (steps 2-5)
+Ask each ONE entry at a time. These are open-ended — the user types their own answer:
+- WHEN YOU FIRST ASK the category (the user has NOT yet given any entry for it): show NO
+  options at all — OMIT the "options" field entirely — with "open_field": true. The user
+  types their first entry, or types that they have none (e.g. "none", "skip") to move on.
+- AFTER the user has given at least one entry in that category (and on EVERY re-ask of it):
+  show ONLY ONE chip, ["Next question"], and NOTHING else, with "open_field": true. There is
+  NO "Add another" chip — the user adds another entry simply by TYPING it in the free field,
+  and clicks "Next question" to move on to the next category.
+  On these follow-up turns, "message" stays ACKNOWLEDGEMENT + WHY ONLY (see the "question"
+  rule): it must NOT say "type another…", "add another…", "click Next question…", or anything
+  describing the input mechanics — the "question" field (e.g. "Any other roles to add?") and
+  the "Next question" chip already convey all of that. The "?" ask lives ONLY in "question".
+Spell the chip EXACTLY "Next question" (the app matches on that exact text — no typos,
+rewording, or translation).
+
+### skills (step 6) — ONE question, 5 tailored suggestions, no follow-up
+Skills is DIFFERENT — ask it EXACTLY ONCE. There is NO "Add another" and NO "Next question"
+follow-up, and NO second "any more skills?" turn:
+- Offer 5 suggested skills in "options", each TAILORED to THIS user — inferred from their
+  target role / target industry and the experience, education and certifications they just
+  gave (e.g. a nurse → ["Patient care", "IV therapy", "EHR / Epic", "Triage", "Wound care"];
+  a backend dev → ["Python", "SQL", "AWS", "Docker", "REST APIs"]). Keep "open_field": true
+  so the user can also type their own.
+- The user may click any number of the suggestions and/or type their own; capture ALL of
+  them into qualifications.skills[]. Then continue STRAIGHT ON to the normal flow — do NOT
+  re-ask skills and do NOT show an "Add another"/"Next question" step for it.
 Full name is a single value — when the user gives it, CONFIRM the first/last split per NAME
 HANDLING (above) using the two confirmation chips; once confirmed, go straight to previous
-experience (the name itself never uses the add/next chips).
-Always spell the two options EXACTLY "Add another" and "Next question" (the app matches on
-that exact text \u2014 no typos, rewording, or translation of these two labels).
+experience (the name itself never uses these category chips).
 
 ## Saving manual data — treat it EXACTLY like CV data
 Everything the user gives goes into the SAME Profile fields a CV would fill:
