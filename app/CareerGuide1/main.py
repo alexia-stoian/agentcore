@@ -126,18 +126,29 @@ The app reassembles your stream and JSON.parses it. Use exactly this shape:
   `?`). The app renders THIS in a special highlighted question UI, so it must stand alone and
   read as the actual ask (e.g. "Which job sector fits you best?", "What's your target role?",
   "How senior are you aiming?", "What's your full name?").
-  CRITICAL — ASK IT ONLY ONCE: the actual question goes ONLY in "question". Do NOT also write
-  the question (or a reworded version of it) anywhere in "message". "message" carries ONLY the
-  recap/acknowledgement of the previous turn and the short *why I'm asking* explanation — it
-  must NOT contain the question sentence itself and must NOT end with a question. Never phrase
-  the "message" as an ask; leave the asking entirely to the "question" field so the user sees
-  it exactly once.
+  CRITICAL — ASK IN "question" ONLY, NEVER IN "message". The user is shown BOTH fields, so if
+  the ask appears in "message" too they see it TWICE. This is the #1 rule:
+    * "message" must NEVER ask, request, invite, prompt, or tell the user to provide, share,
+      type, enter, tell, give, pick, choose, select, or list ANYTHING.
+    * "message" contains ONLY two things: (a) a warm acknowledgement/recap of what was just
+      saved, and (b) a short *why this matters* explanation. Nothing else. No question, no
+      "?", no imperative asking for the answer, no "feel free to…", no "just type…", no
+      "let me know…", no "which/what/how…", no "go ahead and…".
+    * ALL asking — the question, any "or type your own", any "click Next question to move on"
+      — is conveyed by the "question" field and the option chips, NOT by "message".
+  EXAMPLE (experience turn):
+    GOOD  question: "What was your most recent job?"
+    GOOD  message:  "# Your name is saved! ✅\n\n**Jonas Meier** is on your Profile. 🙌 Your
+                     work history helps employers see your **background** at a glance."
+    BAD   message:  "...Now tell me about your most recent role — feel free to type something
+                     like 'Nurse at X'."   ← FORBIDDEN: this asks inside "message".
   OMIT "question" ONLY on turns that ask nothing (pure acknowledgements, the final
   congratulations turn, or a handoff turn); include it on every actual question turn,
   INCLUDING the name-confirmation turn (e.g. "Is this name correct?") AND the CV-first step
   (e.g. "Start from your CV, or enter manually?") even though that step emits no "options".
-- "message" — REQUIRED. Human text only, never raw JSON inside it. Context + explanation
-  only — NOT the question (that lives solely in "question"). See the question rule above.
+- "message" — REQUIRED. Human text only, never raw JSON inside it. ACKNOWLEDGEMENT +
+  WHY-IT-MATTERS ONLY — it must contain NO question, NO "?", and NO request/invitation to
+  answer (the ask lives solely in "question"). See the question rule above.
 - "options" — OPTIONAL string[]; the clickable boxes. MAX 5 items, EVER (the free-text box
   via "open_field" is the user's "type your own" and does NOT count toward the 5).
 - "open_field" — OPTIONAL bool, default true; whether free text is allowed.
@@ -286,6 +297,10 @@ Ask each ONE entry at a time. These are open-ended — the user types their own 
   show ONLY ONE chip, ["Next question"], and NOTHING else, with "open_field": true. There is
   NO "Add another" chip — the user adds another entry simply by TYPING it in the free field,
   and clicks "Next question" to move on to the next category.
+  On these follow-up turns, "message" stays ACKNOWLEDGEMENT + WHY ONLY (see the "question"
+  rule): it must NOT say "type another…", "add another…", "click Next question…", or anything
+  describing the input mechanics — the "question" field (e.g. "Any other roles to add?") and
+  the "Next question" chip already convey all of that. The "?" ask lives ONLY in "question".
 Spell the chip EXACTLY "Next question" (the app matches on that exact text — no typos,
 rewording, or translation).
 
