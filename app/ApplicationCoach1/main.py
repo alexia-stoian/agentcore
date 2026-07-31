@@ -4,6 +4,13 @@ from strands import Agent, tool
 import asyncio
 import json
 import random
+import re
+import socket
+import ipaddress
+from html.parser import HTMLParser
+from urllib.parse import urlparse, urljoin
+from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.error import URLError, HTTPError
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
@@ -198,9 +205,10 @@ advice genuinely depends on one.)
   The user can paste the full posting text OR a job-posting URL into the free-text box, click
   a chip, or say they have no specific job.
 - IF the user provides a posting (pasted text) or a URL: treat it as the authoritative target
-  and tailor tightly to THAT job - its title, company, and stated requirements. For a cover
-  letter, use it to fill "jobTitle"/"company"/"jobUrl". For an interview, aim the questions at
-  that posting's responsibilities and required skills.
+  and tailor tightly to THAT job - its title, company, and stated requirements. For a URL,
+  call the `fetch_url` tool to READ the posting first (see FETCHING JOB-POSTING URLS), then
+  tailor to its content. For a cover letter, use it to fill "jobTitle"/"company"/"jobUrl". For
+  an interview, aim the questions at that posting's responsibilities and required skills.
 - IF the user has NO specific job: fall back to the target role in their Profile
   (user_profile: primaryRole / targetRoles). The agent works perfectly well this way - build
   the interview / cover letter around that target role and the rest of their Profile.
@@ -212,6 +220,22 @@ advice genuinely depends on one.)
   role) and REUSE it for every interview and cover letter afterwards in this chat; do NOT
   re-ask when the user switches modes. Only ask again if the user themselves brings up a
   different job.
+
+# FETCHING JOB-POSTING URLS (you CAN do this)
+You HAVE a tool called `fetch_url` that downloads a web page and returns its readable text, so
+you CAN open job-posting links. NEVER tell the user you can't browse URLs or fetch web pages.
+Whenever the user shares a URL to a job posting (or picks "Share a job link"):
+- Call `fetch_url` with that URL to READ the posting BEFORE tailoring anything. Do NOT emit any
+  message text on the turn you call the tool - just call it; your single JSON reply comes after
+  the tool returns.
+- Use the returned text as the authoritative target job: pull the real title, company,
+  responsibilities, and required skills from it and tailor the interview questions or cover
+  letter tightly to them. Never invent details the posting doesn't contain.
+- If `fetch_url` returns a string starting with "ERROR:" (e.g. the page needs a login or
+  JavaScript, or couldn't be reached), warmly tell the user you couldn't open that particular
+  link and ask them to paste the posting text instead - then carry on normally.
+- Only fetch the job-posting / career-page links the user gives you for this purpose; don't
+  fetch unrelated URLs.
 
 # HANDING OFF (SILENTLY, to the CV Builder)
 You own three jobs: interview practice, cover letters, and coaching/advice about those two
@@ -418,8 +442,135 @@ experience/skills/certifications (from their Profile/CV), desired tone, and lang
 """
 
 
-# ApplicationCoach uses no tools - it is a pure conversational agent.
-tools = []
+# --- Web fetch tool: lets the agent read a job-posting URL the user shares -----------------
+_FETCH_TIMEOUT = 12            # seconds per request
+_FETCH_MAX_BYTES = 2_000_000   # cap downloaded bytes (~2 MB)
+_FETCH_MAX_CHARS = 12_000      # cap text handed back to the model
+_FETCH_MAX_REDIRECTS = 3
+_FETCH_USER_AGENT = "Mozilla/5.0 (compatible; SwissJobCoachBot/1.0)"
+
+
+def _host_is_public(hostname: str) -> bool:
+    """SSRF guard: resolve the host and require every resolved IP to be public."""
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_multicast or addr.is_reserved or addr.is_unspecified):
+            return False
+    return True
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Collect visible text from HTML, skipping script/style/noscript."""
+
+    _SKIP_TAGS = {"script", "style", "noscript", "template", "svg"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth == 0:
+            chunk = data.strip()
+            if chunk:
+                self.parts.append(chunk)
+
+
+@tool
+def fetch_url(url: str) -> str:
+    """Fetch a web page (typically a job posting) and return its readable plain text.
+
+    Use this whenever the user shares a link to a job posting so you can tailor the mock
+    interview or cover letter to the REAL posting. Returns the page text with scripts/styles
+    removed, truncated if very long. On failure returns a short string beginning with
+    'ERROR:' (e.g. blocked host, HTTP error, or a page that needs login/JavaScript).
+    """
+    current = (url or "").strip()
+    if not current:
+        return "ERROR: no URL was provided."
+
+    class _NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None  # handle redirects manually so we re-check each hop for SSRF
+
+    opener = build_opener(_NoRedirect)
+
+    for _ in range(_FETCH_MAX_REDIRECTS + 1):
+        parsed = urlparse(current)
+        if parsed.scheme not in ("http", "https"):
+            return "ERROR: only http/https links are supported."
+        host = parsed.hostname
+        if not host or not _host_is_public(host):
+            return "ERROR: that link points to a non-public or unreachable host, so it was blocked."
+        req = Request(current, headers={"User-Agent": _FETCH_USER_AGENT,
+                                        "Accept": "text/html,application/xhtml+xml,*/*"})
+        try:
+            with opener.open(req, timeout=_FETCH_TIMEOUT) as resp:
+                status = getattr(resp, "status", None) or resp.getcode()
+                if status in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    if not location:
+                        return "ERROR: the page redirected without a destination."
+                    current = urljoin(current, location)
+                    continue
+                content_type = resp.headers.get("Content-Type", "")
+                raw = resp.read(_FETCH_MAX_BYTES + 1)
+        except HTTPError as exc:
+            return f"ERROR: the page returned HTTP {exc.code}."
+        except URLError as exc:
+            return f"ERROR: could not reach the page ({getattr(exc, 'reason', 'unknown error')})."
+        except Exception as exc:  # surface a clean message to the model instead of crashing
+            return f"ERROR: failed to fetch the page ({type(exc).__name__})."
+
+        raw = raw[:_FETCH_MAX_BYTES]
+        charset = "utf-8"
+        m = re.search(r"charset=([\w\-]+)", content_type, re.I)
+        if m:
+            charset = m.group(1)
+        try:
+            html = raw.decode(charset, errors="replace")
+        except LookupError:
+            html = raw.decode("utf-8", errors="replace")
+
+        if "html" in content_type.lower() or "<html" in html[:4000].lower():
+            extractor = _HTMLTextExtractor()
+            try:
+                extractor.feed(html)
+            except Exception:  # malformed HTML shouldn't crash the tool
+                pass
+            text = "\n".join(extractor.parts)
+        else:
+            text = html
+
+        text = re.sub(r"[ \t\f\v]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        if not text:
+            return "ERROR: the page had no readable text (it may require login or JavaScript)."
+        if len(text) > _FETCH_MAX_CHARS:
+            text = text[:_FETCH_MAX_CHARS].rstrip() + "\n\n[...truncated...]"
+        return text
+
+    return "ERROR: the link redirected too many times."
+
+
+tools = [fetch_url]
 
 _INLINE_FUNCTION_NAMES = set()
 
