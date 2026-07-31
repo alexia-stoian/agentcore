@@ -493,6 +493,136 @@ class _HTMLTextExtractor(HTMLParser):
                 self.parts.append(chunk)
 
 
+def _clean_ws(text: str) -> str:
+    """Collapse runs of spaces/blank lines produced by HTML extraction."""
+    if not text:
+        return ""
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _html_to_text(fragment: str) -> str:
+    """Extract readable text from an HTML fragment (e.g. a JSON job-description field)."""
+    extractor = _HTMLTextExtractor()
+    try:
+        extractor.feed(fragment)
+    except Exception:  # malformed markup: fall back to a crude tag strip
+        return re.sub(r"<[^>]+>", " ", fragment)
+    return "\n".join(extractor.parts)
+
+
+def _iter_jsonld_objects(data):
+    """Yield every dict in a JSON-LD blob, walking @graph and lists."""
+    if isinstance(data, dict):
+        graph = data.get("@graph")
+        if isinstance(graph, list):
+            for item in graph:
+                yield from _iter_jsonld_objects(item)
+        yield data
+    elif isinstance(data, list):
+        for item in data:
+            yield from _iter_jsonld_objects(item)
+
+
+def _jsonld_location(loc) -> str:
+    """Turn a schema.org jobLocation (dict or list) into a short location string."""
+    if isinstance(loc, list):
+        return ", ".join(filter(None, (_jsonld_location(item) for item in loc)))
+    if isinstance(loc, dict):
+        addr = loc.get("address", loc)
+        if isinstance(addr, dict):
+            bits = [addr.get("addressLocality"), addr.get("addressRegion"), addr.get("addressCountry")]
+            return ", ".join(str(b) for b in bits if b)
+    return ""
+
+
+def _format_jobposting(obj: dict):
+    """Render a schema.org JobPosting object as readable text."""
+    parts = []
+    if obj.get("title"):
+        parts.append(f"Job title: {obj['title']}")
+    org = obj.get("hiringOrganization")
+    if isinstance(org, dict) and org.get("name"):
+        parts.append(f"Company: {org['name']}")
+    location = _jsonld_location(obj.get("jobLocation"))
+    if location:
+        parts.append(f"Location: {location}")
+    emp = obj.get("employmentType")
+    if emp:
+        parts.append(f"Employment type: {emp if isinstance(emp, str) else ', '.join(map(str, emp))}")
+    desc = obj.get("description")
+    if desc:
+        parts.append("")
+        parts.append(_html_to_text(desc))
+    result = "\n".join(parts).strip()
+    return result or None
+
+
+def _extract_jsonld_jobposting(html: str):
+    """Find a schema.org JobPosting embedded as JSON-LD (Greenhouse, Lever, LinkedIn, etc.)."""
+    for match in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.I | re.S
+    ):
+        try:
+            data = json.loads(match.group(1).strip())
+        except Exception:
+            continue
+        for obj in _iter_jsonld_objects(data):
+            types = obj.get("@type")
+            types = types if isinstance(types, list) else [types]
+            if any(str(t).lower() == "jobposting" for t in types):
+                formatted = _format_jobposting(obj)
+                if formatted:
+                    return formatted
+    return None
+
+
+def _fetch_workday_cxs(parsed, opener):
+    """Workday career sites are SPAs, but expose a JSON API (CXS) for each job.
+
+    Transform the human page URL to its /wday/cxs/<tenant>/<site>/job/... endpoint and read
+    the posting from JSON. Same host as the (already SSRF-validated) page, so no new host check.
+    """
+    host = parsed.hostname or ""
+    tenant = host.split(".")[0]
+    segments = [s for s in parsed.path.split("/") if s]
+    if "job" not in segments:
+        return None
+    job_idx = segments.index("job")
+    if job_idx < 1:
+        return None
+    site = segments[job_idx - 1]
+    job_path = "/".join(segments[job_idx:])
+    api_url = f"{parsed.scheme}://{host}/wday/cxs/{tenant}/{site}/{job_path}"
+    req = Request(api_url, headers={"User-Agent": _FETCH_USER_AGENT, "Accept": "application/json"})
+    try:
+        with opener.open(req, timeout=_FETCH_TIMEOUT) as resp:
+            if (getattr(resp, "status", None) or resp.getcode()) != 200:
+                return None
+            raw = resp.read(_FETCH_MAX_BYTES + 1)[:_FETCH_MAX_BYTES]
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+    info = data.get("jobPostingInfo") if isinstance(data, dict) else None
+    if not isinstance(info, dict):
+        return None
+    parts = []
+    if info.get("title"):
+        parts.append(f"Job title: {info['title']}")
+    if info.get("location"):
+        parts.append(f"Location: {info['location']}")
+    if info.get("timeType"):
+        parts.append(f"Time type: {info['timeType']}")
+    if info.get("startDate"):
+        parts.append(f"Posted: {info['startDate']}")
+    if info.get("jobDescription"):
+        parts.append("")
+        parts.append(_html_to_text(info["jobDescription"]))
+    result = "\n".join(parts).strip()
+    return result or None
+
+
 @tool
 def fetch_url(url: str) -> str:
     """Fetch a web page (typically a job posting) and return its readable plain text.
@@ -550,22 +680,29 @@ def fetch_url(url: str) -> str:
             html = raw.decode("utf-8", errors="replace")
 
         if "html" in content_type.lower() or "<html" in html[:4000].lower():
-            extractor = _HTMLTextExtractor()
-            try:
-                extractor.feed(html)
-            except Exception:  # malformed HTML shouldn't crash the tool
-                pass
-            text = "\n".join(extractor.parts)
+            is_html = True
+            visible = _clean_ws(_html_to_text(html))
         else:
-            text = html
+            is_html = False
+            visible = _clean_ws(html)
 
-        text = re.sub(r"[ \t\f\v]+", " ", text)
-        text = re.sub(r"\n{3,}", "\n\n", text).strip()
-        if not text:
-            return "ERROR: the page had no readable text (it may require login or JavaScript)."
-        if len(text) > _FETCH_MAX_CHARS:
-            text = text[:_FETCH_MAX_CHARS].rstrip() + "\n\n[...truncated...]"
-        return text
+        # JavaScript-rendered career sites (Workday, Greenhouse, Lever, LinkedIn, ...) return
+        # a near-empty SPA shell to a plain HTTP fetch. Recover the real posting from
+        # structured sources that survive without a browser.
+        structured = None
+        if is_html:
+            structured = _extract_jsonld_jobposting(html)
+        if not structured and host.lower().endswith("myworkdayjobs.com"):
+            structured = _fetch_workday_cxs(parsed, opener)
+
+        result = _clean_ws(structured) if structured else visible
+        if not result or len(result) < 60:
+            return ("ERROR: that page needs JavaScript or a login to show the job (common on "
+                    "Workday, Greenhouse and similar career sites), so I couldn't read it. "
+                    "Please paste the job posting text and I'll tailor to it.")
+        if len(result) > _FETCH_MAX_CHARS:
+            result = result[:_FETCH_MAX_CHARS].rstrip() + "\n\n[...truncated...]"
+        return result
 
     return "ERROR: the link redirected too many times."
 
