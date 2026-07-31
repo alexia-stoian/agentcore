@@ -4,6 +4,13 @@ from strands import Agent, tool
 import asyncio
 import json
 import random
+import re
+import socket
+import ipaddress
+from html.parser import HTMLParser
+from urllib.parse import urlparse, urljoin
+from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.error import URLError, HTTPError
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
@@ -104,7 +111,8 @@ The app reassembles your stream and JSON.parses it. Shape:
   "cover_letter": { ...only when creating/revising a letter... },
   "interview": { ...only during an interview... },
   "profile": { ...only when saving a newly captured target role... },
-  "handoff": "cv_builder"            // ONLY on a SILENT handoff to the CV Builder (see HANDING OFF)
+  "handoff": "cv_builder",           // ONLY on a SILENT handoff to the CV Builder (see HANDING OFF)
+  "handoff_context": { ...internal context you pass WITH a handoff so the next agent has what the user told you... }
 }
 - "status" - REQUIRED, and emit it as the VERY FIRST field so it streams out before
   anything else. A SHORT present-progressive label (3-6 words, plain text, no markdown or
@@ -136,6 +144,20 @@ The app reassembles your stream and JSON.parses it. Shape:
   user off to the CV Builder (see HANDING OFF). Omit it on every other turn. When you set it,
   omit the "interview"/"cover_letter"/"profile" blocks AND leave "message" an EMPTY string
   "" (the handoff is invisible to the user - see HANDING OFF).
+- "handoff_context" - OPTIONAL object; include it ONLY on a handoff turn, ALONGSIDE "handoff".
+  It is INTERNAL data (NEVER shown to the user, allowed even on the silent handoff turn) that
+  travels to the next agent so they DON'T re-ask for what the user already gave you. Include
+  whatever applies:
+    "from": "coach",
+    "summary": "<1-3 sentence recap of what you did this chat + what the user now wants>",
+    "jobUrl": "<the job link the user shared, if any>",
+    "jobPosting": "<the posting text you fetched or were given, trimmed to the essentials>",
+    "targetRole": "<the role/company being targeted, if established>",
+    "notes": "<anything else the user told you the next agent needs>".
+  Whenever the user shared a link or posting this conversation, ALWAYS fill jobUrl AND
+  jobPosting (the CV Builder has no fetch tool, so paste the actual posting text you already
+  read) - that is how the next agent works from the job immediately instead of asking for the
+  URL again.
 - Output VALID JSON only. Use EXACTLY the key names below (camelCase) and the listed enum
   values - the app matches on them. Scores are integers 0-100.
 - JSON VALIDITY (CRITICAL - a malformed reply breaks the app): the ENTIRE response must
@@ -198,9 +220,10 @@ advice genuinely depends on one.)
   The user can paste the full posting text OR a job-posting URL into the free-text box, click
   a chip, or say they have no specific job.
 - IF the user provides a posting (pasted text) or a URL: treat it as the authoritative target
-  and tailor tightly to THAT job - its title, company, and stated requirements. For a cover
-  letter, use it to fill "jobTitle"/"company"/"jobUrl". For an interview, aim the questions at
-  that posting's responsibilities and required skills.
+  and tailor tightly to THAT job - its title, company, and stated requirements. For a URL,
+  call the `fetch_url` tool to READ the posting first (see FETCHING JOB-POSTING URLS), then
+  tailor to its content. For a cover letter, use it to fill "jobTitle"/"company"/"jobUrl". For
+  an interview, aim the questions at that posting's responsibilities and required skills.
 - IF the user has NO specific job: fall back to the target role in their Profile
   (user_profile: primaryRole / targetRoles). The agent works perfectly well this way - build
   the interview / cover letter around that target role and the rest of their Profile.
@@ -212,6 +235,22 @@ advice genuinely depends on one.)
   role) and REUSE it for every interview and cover letter afterwards in this chat; do NOT
   re-ask when the user switches modes. Only ask again if the user themselves brings up a
   different job.
+
+# FETCHING JOB-POSTING URLS (you CAN do this)
+You HAVE a tool called `fetch_url` that downloads a web page and returns its readable text, so
+you CAN open job-posting links. NEVER tell the user you can't browse URLs or fetch web pages.
+Whenever the user shares a URL to a job posting (or picks "Share a job link"):
+- Call `fetch_url` with that URL to READ the posting BEFORE tailoring anything. Do NOT emit any
+  message text on the turn you call the tool - just call it; your single JSON reply comes after
+  the tool returns.
+- Use the returned text as the authoritative target job: pull the real title, company,
+  responsibilities, and required skills from it and tailor the interview questions or cover
+  letter tightly to them. Never invent details the posting doesn't contain.
+- If `fetch_url` returns a string starting with "ERROR:" (e.g. the page needs a login or
+  JavaScript, or couldn't be reached), warmly tell the user you couldn't open that particular
+  link and ask them to paste the posting text instead - then carry on normally.
+- Only fetch the job-posting / career-page links the user gives you for this purpose; don't
+  fetch unrelated URLs.
 
 # HANDING OFF (SILENTLY, to the CV Builder)
 You own three jobs: interview practice, cover letters, and coaching/advice about those two
@@ -237,11 +276,29 @@ THE HANDOFF IS SILENT - the user must NEVER be told it happened. On that turn:
     sees the CV Builder's reply, as if the same assistant simply answered.
   - Keep "status" NEUTRAL too (e.g. "One moment") - it must NOT mention a handoff, the CV
     Builder, or switching assistants, in case the app shows it briefly.
+  - DO include a "handoff_context" object (see OUTPUT CONTRACT). This is internal data, not a
+    visible message, so it is REQUIRED even on the silent turn: put the job URL AND the posting
+    text you fetched, the target role/company, and a one-line summary in it, so the CV Builder
+    already has everything the user told you and never re-asks for the link.
   - Emit NO "interview"/"cover_letter"/"profile" block, and NO "options"; stop the current
     flow (progress is saved, they can resume later).
 If you're genuinely unsure whether it's off-topic, ask ONE short clarifying question first
 (a normal plain chat turn with a real message, no handoff) rather than handing off
 prematurely.
+
+# RECEIVING A HANDOFF (context from another assistant)
+Sometimes the user was just talking to another assistant (the CV Builder or the Career Guide)
+and got routed to YOU mid-conversation. When that happens, the app passes along a
+"handoff_context" object - the previous assistant's high-level recap plus anything the user
+already shared, ESPECIALLY a job link (jobUrl) and the fetched/pasted posting text
+(jobPosting), and the target role/company. If a handoff_context is present in the input:
+- TREAT everything in it as ALREADY KNOWN. Do NOT re-ask for the job URL, the posting, the
+  target role, or anything it already contains - the user must never have to repeat what they
+  already told the other assistant.
+- If it carries a jobUrl and/or jobPosting, use that as the target job straight away; you do
+  NOT need to call fetch_url again when the posting text is already there.
+- Read its "summary"/"notes" so you continue seamlessly, as if you'd been in the conversation
+  all along, then get straight to the interview / cover letter / advice they wanted.
 
 ########################################################################################
 # COACHING & ADVICE MODE (open Q&A + brainstorming)
@@ -418,8 +475,272 @@ experience/skills/certifications (from their Profile/CV), desired tone, and lang
 """
 
 
-# ApplicationCoach uses no tools - it is a pure conversational agent.
-tools = []
+# --- Web fetch tool: lets the agent read a job-posting URL the user shares -----------------
+_FETCH_TIMEOUT = 12            # seconds per request
+_FETCH_MAX_BYTES = 2_000_000   # cap downloaded bytes (~2 MB)
+_FETCH_MAX_CHARS = 12_000      # cap text handed back to the model
+_FETCH_MAX_REDIRECTS = 3
+_FETCH_USER_AGENT = "Mozilla/5.0 (compatible; SwissJobCoachBot/1.0)"
+
+
+def _host_is_public(hostname: str) -> bool:
+    """SSRF guard: resolve the host and require every resolved IP to be public."""
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_multicast or addr.is_reserved or addr.is_unspecified):
+            return False
+    return True
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Collect visible text from HTML, skipping script/style/noscript."""
+
+    _SKIP_TAGS = {"script", "style", "noscript", "template", "svg"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth == 0:
+            chunk = data.strip()
+            if chunk:
+                self.parts.append(chunk)
+
+
+def _clean_ws(text: str) -> str:
+    """Collapse runs of spaces/blank lines produced by HTML extraction."""
+    if not text:
+        return ""
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _html_to_text(fragment: str) -> str:
+    """Extract readable text from an HTML fragment (e.g. a JSON job-description field)."""
+    extractor = _HTMLTextExtractor()
+    try:
+        extractor.feed(fragment)
+    except Exception:  # malformed markup: fall back to a crude tag strip
+        return re.sub(r"<[^>]+>", " ", fragment)
+    return "\n".join(extractor.parts)
+
+
+def _iter_jsonld_objects(data):
+    """Yield every dict in a JSON-LD blob, walking @graph and lists."""
+    if isinstance(data, dict):
+        graph = data.get("@graph")
+        if isinstance(graph, list):
+            for item in graph:
+                yield from _iter_jsonld_objects(item)
+        yield data
+    elif isinstance(data, list):
+        for item in data:
+            yield from _iter_jsonld_objects(item)
+
+
+def _jsonld_location(loc) -> str:
+    """Turn a schema.org jobLocation (dict or list) into a short location string."""
+    if isinstance(loc, list):
+        return ", ".join(filter(None, (_jsonld_location(item) for item in loc)))
+    if isinstance(loc, dict):
+        addr = loc.get("address", loc)
+        if isinstance(addr, dict):
+            bits = [addr.get("addressLocality"), addr.get("addressRegion"), addr.get("addressCountry")]
+            return ", ".join(str(b) for b in bits if b)
+    return ""
+
+
+def _format_jobposting(obj: dict):
+    """Render a schema.org JobPosting object as readable text."""
+    parts = []
+    if obj.get("title"):
+        parts.append(f"Job title: {obj['title']}")
+    org = obj.get("hiringOrganization")
+    if isinstance(org, dict) and org.get("name"):
+        parts.append(f"Company: {org['name']}")
+    location = _jsonld_location(obj.get("jobLocation"))
+    if location:
+        parts.append(f"Location: {location}")
+    emp = obj.get("employmentType")
+    if emp:
+        parts.append(f"Employment type: {emp if isinstance(emp, str) else ', '.join(map(str, emp))}")
+    desc = obj.get("description")
+    if desc:
+        parts.append("")
+        parts.append(_html_to_text(desc))
+    result = "\n".join(parts).strip()
+    return result or None
+
+
+def _extract_jsonld_jobposting(html: str):
+    """Find a schema.org JobPosting embedded as JSON-LD (Greenhouse, Lever, LinkedIn, etc.)."""
+    for match in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.I | re.S
+    ):
+        try:
+            data = json.loads(match.group(1).strip())
+        except Exception:
+            continue
+        for obj in _iter_jsonld_objects(data):
+            types = obj.get("@type")
+            types = types if isinstance(types, list) else [types]
+            if any(str(t).lower() == "jobposting" for t in types):
+                formatted = _format_jobposting(obj)
+                if formatted:
+                    return formatted
+    return None
+
+
+def _fetch_workday_cxs(parsed, opener):
+    """Workday career sites are SPAs, but expose a JSON API (CXS) for each job.
+
+    Transform the human page URL to its /wday/cxs/<tenant>/<site>/job/... endpoint and read
+    the posting from JSON. Same host as the (already SSRF-validated) page, so no new host check.
+    """
+    host = parsed.hostname or ""
+    tenant = host.split(".")[0]
+    segments = [s for s in parsed.path.split("/") if s]
+    if "job" not in segments:
+        return None
+    job_idx = segments.index("job")
+    if job_idx < 1:
+        return None
+    site = segments[job_idx - 1]
+    job_path = "/".join(segments[job_idx:])
+    api_url = f"{parsed.scheme}://{host}/wday/cxs/{tenant}/{site}/{job_path}"
+    req = Request(api_url, headers={"User-Agent": _FETCH_USER_AGENT, "Accept": "application/json"})
+    try:
+        with opener.open(req, timeout=_FETCH_TIMEOUT) as resp:
+            if (getattr(resp, "status", None) or resp.getcode()) != 200:
+                return None
+            raw = resp.read(_FETCH_MAX_BYTES + 1)[:_FETCH_MAX_BYTES]
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+    info = data.get("jobPostingInfo") if isinstance(data, dict) else None
+    if not isinstance(info, dict):
+        return None
+    parts = []
+    if info.get("title"):
+        parts.append(f"Job title: {info['title']}")
+    if info.get("location"):
+        parts.append(f"Location: {info['location']}")
+    if info.get("timeType"):
+        parts.append(f"Time type: {info['timeType']}")
+    if info.get("startDate"):
+        parts.append(f"Posted: {info['startDate']}")
+    if info.get("jobDescription"):
+        parts.append("")
+        parts.append(_html_to_text(info["jobDescription"]))
+    result = "\n".join(parts).strip()
+    return result or None
+
+
+@tool
+def fetch_url(url: str) -> str:
+    """Fetch a web page (typically a job posting) and return its readable plain text.
+
+    Use this whenever the user shares a link to a job posting so you can tailor the mock
+    interview or cover letter to the REAL posting. Returns the page text with scripts/styles
+    removed, truncated if very long. On failure returns a short string beginning with
+    'ERROR:' (e.g. blocked host, HTTP error, or a page that needs login/JavaScript).
+    """
+    current = (url or "").strip()
+    if not current:
+        return "ERROR: no URL was provided."
+
+    class _NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None  # handle redirects manually so we re-check each hop for SSRF
+
+    opener = build_opener(_NoRedirect)
+
+    for _ in range(_FETCH_MAX_REDIRECTS + 1):
+        parsed = urlparse(current)
+        if parsed.scheme not in ("http", "https"):
+            return "ERROR: only http/https links are supported."
+        host = parsed.hostname
+        if not host or not _host_is_public(host):
+            return "ERROR: that link points to a non-public or unreachable host, so it was blocked."
+        req = Request(current, headers={"User-Agent": _FETCH_USER_AGENT,
+                                        "Accept": "text/html,application/xhtml+xml,*/*"})
+        try:
+            with opener.open(req, timeout=_FETCH_TIMEOUT) as resp:
+                status = getattr(resp, "status", None) or resp.getcode()
+                if status in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    if not location:
+                        return "ERROR: the page redirected without a destination."
+                    current = urljoin(current, location)
+                    continue
+                content_type = resp.headers.get("Content-Type", "")
+                raw = resp.read(_FETCH_MAX_BYTES + 1)
+        except HTTPError as exc:
+            return f"ERROR: the page returned HTTP {exc.code}."
+        except URLError as exc:
+            return f"ERROR: could not reach the page ({getattr(exc, 'reason', 'unknown error')})."
+        except Exception as exc:  # surface a clean message to the model instead of crashing
+            return f"ERROR: failed to fetch the page ({type(exc).__name__})."
+
+        raw = raw[:_FETCH_MAX_BYTES]
+        charset = "utf-8"
+        m = re.search(r"charset=([\w\-]+)", content_type, re.I)
+        if m:
+            charset = m.group(1)
+        try:
+            html = raw.decode(charset, errors="replace")
+        except LookupError:
+            html = raw.decode("utf-8", errors="replace")
+
+        if "html" in content_type.lower() or "<html" in html[:4000].lower():
+            is_html = True
+            visible = _clean_ws(_html_to_text(html))
+        else:
+            is_html = False
+            visible = _clean_ws(html)
+
+        # JavaScript-rendered career sites (Workday, Greenhouse, Lever, LinkedIn, ...) return
+        # a near-empty SPA shell to a plain HTTP fetch. Recover the real posting from
+        # structured sources that survive without a browser.
+        structured = None
+        if is_html:
+            structured = _extract_jsonld_jobposting(html)
+        if not structured and host.lower().endswith("myworkdayjobs.com"):
+            structured = _fetch_workday_cxs(parsed, opener)
+
+        result = _clean_ws(structured) if structured else visible
+        if not result or len(result) < 60:
+            return ("ERROR: that page needs JavaScript or a login to show the job (common on "
+                    "Workday, Greenhouse and similar career sites), so I couldn't read it. "
+                    "Please paste the job posting text and I'll tailor to it.")
+        if len(result) > _FETCH_MAX_CHARS:
+            result = result[:_FETCH_MAX_CHARS].rstrip() + "\n\n[...truncated...]"
+        return result
+
+    return "ERROR: the link redirected too many times."
+
+
+tools = [fetch_url]
 
 _INLINE_FUNCTION_NAMES = set()
 
@@ -500,6 +821,28 @@ def _profile_preamble(payload):
     )
 
 
+def _handoff_context_preamble(payload):
+    """Build a preamble from handoff_context the app forwards when another assistant routed the
+    user here mid-conversation, so we DON'T re-ask for what they already shared (e.g. a job
+    link/posting or target role)."""
+    hc = payload.get("handoff_context") if isinstance(payload, dict) else None
+    if not hc:
+        return None
+    if isinstance(hc, str):
+        try:
+            hc = json.loads(hc)
+        except (ValueError, TypeError):
+            pass  # keep the raw string as-is
+    body = hc if isinstance(hc, str) else json.dumps(hc, ensure_ascii=False)
+    return (
+        "SYSTEM: HANDOFF CONTEXT from the assistant the user was just talking to. The user was "
+        "seamlessly routed to you mid-conversation and does NOT know a handoff happened. Treat "
+        "everything here as ALREADY KNOWN - do NOT re-ask for the job URL, the posting text, the "
+        "target role, or anything it contains; use it and continue their request right away.\n"
+        + body
+    )
+
+
 def _status_label(payload):
     """Personalized, varied ephemeral label emitted BEFORE the model answers.
 
@@ -573,6 +916,15 @@ async def invoke(payload, context):
             prompt = _preamble + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
         elif isinstance(prompt, list):
             prompt = [{"role": "user", "content": [{"text": _preamble}]}] + prompt
+
+    # If the app forwarded handoff_context from the assistant that just routed the user here,
+    # inject it so we pick up the job link/posting and target they already shared - never re-ask.
+    _handoff = _handoff_context_preamble(payload)
+    if _handoff:
+        if isinstance(prompt, str):
+            prompt = _handoff + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
+        elif isinstance(prompt, list):
+            prompt = [{"role": "user", "content": [{"text": _handoff}]}] + prompt
 
     # Emit an ephemeral status bit FIRST - BEFORE the model starts producing - so the app can
     # show a "thinking" indicator during the wait and hide it as soon as the message streams.
