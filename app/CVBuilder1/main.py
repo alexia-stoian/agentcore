@@ -425,6 +425,28 @@ def _profile_preamble(payload):
     )
 
 
+def _handoff_context_preamble(payload):
+    """Build a preamble from handoff_context the app forwards when another assistant routed the
+    user here mid-conversation, so we DON'T re-ask for what they already shared (e.g. a job
+    link/posting or target role)."""
+    hc = payload.get("handoff_context") if isinstance(payload, dict) else None
+    if not hc:
+        return None
+    if isinstance(hc, str):
+        try:
+            hc = json.loads(hc)
+        except (ValueError, TypeError):
+            pass  # keep the raw string as-is
+    body = hc if isinstance(hc, str) else json.dumps(hc, ensure_ascii=False)
+    return (
+        "SYSTEM: HANDOFF CONTEXT from the assistant the user was just talking to. The user was "
+        "seamlessly routed to you mid-conversation and does NOT know a handoff happened. Treat "
+        "everything here as ALREADY KNOWN - do NOT re-ask for the job URL, the posting text, the "
+        "target role, or anything it contains; use it and continue their request right away.\n"
+        + body
+    )
+
+
 def _status_label(payload):
     """Personalized, varied ephemeral label emitted BEFORE the model answers.
 
@@ -489,6 +511,15 @@ async def invoke(payload, context):
             prompt = _preamble + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
         elif isinstance(prompt, list):
             prompt = [{"role": "user", "content": [{"text": _preamble}]}] + prompt
+
+    # If the app forwarded handoff_context from the assistant that just routed the user here,
+    # inject it so we pick up the job link/posting and target they already shared - never re-ask.
+    _handoff = _handoff_context_preamble(payload)
+    if _handoff:
+        if isinstance(prompt, str):
+            prompt = _handoff + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
+        elif isinstance(prompt, list):
+            prompt = [{"role": "user", "content": [{"text": _handoff}]}] + prompt
 
     # Emit an ephemeral status bit FIRST - BEFORE the model starts producing - so the app can
     # show a "thinking" indicator during the wait and hide it as soon as the message streams.
