@@ -4,6 +4,13 @@ from strands import Agent, tool
 import asyncio
 import json
 import random
+import re
+import socket
+import ipaddress
+from html.parser import HTMLParser
+from urllib.parse import urlparse, urljoin
+from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.error import URLError, HTTPError
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
@@ -13,7 +20,7 @@ from memory.session import get_memory_session_manager
 app = BedrockAgentCoreApp()
 log = app.logger
 
-# CVBuilder is a pure conversational agent - no external tools needed.
+# CVBuilder has one tool: fetch_url, so it can read job-posting URLs the user shares.
 mcp_clients = []
 
 DEFAULT_SYSTEM_PROMPT = """
@@ -199,17 +206,44 @@ actually matters for what the user is asking - make sure you have a target:
     "question": "Do you have a specific job in mind?",
     "options": ["Paste the job posting", "Share a job link", "No specific job - use my role"],
     "open_field": true
-- IF the user pastes a posting or a URL: treat it as the authoritative target and tailor the
-  CV tightly to it - its title, must-have skills, and stated requirements decide what to
-  emphasise, reword, or cut.
+- IF the user pastes a posting: treat it as the authoritative target and tailor the CV tightly
+  to it - its title, must-have skills, and stated requirements decide what to emphasise,
+  reword, or cut.
+- IF the user shares a job URL (or one is present in the handoff_context or their Profile):
+  call the `fetch_url` tool to READ the posting (see FETCHING JOB-POSTING URLS), then tailor to
+  its content. You CAN open links - never tell the user you can't.
 - IF the user has NO specific job: use the target role in their Profile (primaryRole /
   targetRoles) and tailor to that.
-- IF there is NO specific job AND no target role in the Profile: ask ONE short question to
-  capture their target role first. Once they answer, SAVE it by emitting a "profile" block
-  { "primaryRole": "<role>", "targetRoles": "<role>" } on that turn, then continue.
-- Ask this only ONCE; remember the target and reuse it. For purely GENERAL CV advice that
+- NEVER HARD-BLOCK waiting for the posting. If you were routed here about a specific job (or
+  the user mentions one) but don't have its full text, DON'T stop and demand it. Work from
+  whatever you already have - the target role/company in user_profile or the handoff_context,
+  plus a fetch_url call if there's a link - and produce real, tailored CV improvements right
+  away. THEN, as an OPTIONAL enhancement (never a gate), invite them to paste the posting or
+  share the link to sharpen it further. Do NOT reply with a blocking line like "I need to see
+  the actual job posting, could you share it?" - that is exactly what to avoid.
+- IF there is NO specific job AND no target role anywhere (Profile or handoff_context): ask ONE
+  short question to capture their target role first. Once they answer, SAVE it by emitting a
+  "profile" block { "primaryRole": "<role>", "targetRoles": "<role>" } on that turn, then
+  continue.
+- Ask about the target only ONCE; remember it and reuse it. For purely GENERAL CV advice that
   doesn't depend on a specific job (e.g. "how long should a CV be?"), you don't need a target
   - just answer.
+
+# FETCHING JOB-POSTING URLS (you CAN do this)
+You HAVE a tool called `fetch_url` that downloads a web page and returns its readable text, so
+you CAN open job-posting links. NEVER tell the user you can't browse URLs or fetch web pages.
+Whenever a job-posting URL is available - the user shares one, or a jobUrl is present in the
+handoff_context or their Profile:
+- Call `fetch_url` with that URL to READ the posting BEFORE tailoring. Do NOT emit any message
+  text on the turn you call the tool - just call it; your single JSON reply comes after the
+  tool returns.
+- Use the returned text as the authoritative target job: pull the real title, company,
+  responsibilities, and required skills from it and tailor the CV/Profile tightly to them.
+  Never invent details the posting doesn't contain.
+- If `fetch_url` returns a string starting with "ERROR:" (e.g. the page needs a login or
+  JavaScript, or couldn't be reached), do NOT stop - tailor from the target role/company you
+  already have and warmly invite the user to paste the posting text to sharpen it further.
+- Only fetch the job-posting / career links relevant to the CV; don't fetch unrelated URLs.
 
 ########################################################################################
 # TAKING ACTION - actually rewriting the Profile / CV
@@ -366,8 +400,272 @@ present in the input:
 """
 
 
-# CVBuilder uses no tools - it is a pure conversational agent.
-tools = []
+# --- Web fetch tool: lets the agent read a job-posting URL the user shares -----------------
+_FETCH_TIMEOUT = 12            # seconds per request
+_FETCH_MAX_BYTES = 2_000_000   # cap downloaded bytes (~2 MB)
+_FETCH_MAX_CHARS = 12_000      # cap text handed back to the model
+_FETCH_MAX_REDIRECTS = 3
+_FETCH_USER_AGENT = "Mozilla/5.0 (compatible; SwissJobCoachBot/1.0)"
+
+
+def _host_is_public(hostname: str) -> bool:
+    """SSRF guard: resolve the host and require every resolved IP to be public."""
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_multicast or addr.is_reserved or addr.is_unspecified):
+            return False
+    return True
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Collect visible text from HTML, skipping script/style/noscript."""
+
+    _SKIP_TAGS = {"script", "style", "noscript", "template", "svg"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth == 0:
+            chunk = data.strip()
+            if chunk:
+                self.parts.append(chunk)
+
+
+def _clean_ws(text: str) -> str:
+    """Collapse runs of spaces/blank lines produced by HTML extraction."""
+    if not text:
+        return ""
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _html_to_text(fragment: str) -> str:
+    """Extract readable text from an HTML fragment (e.g. a JSON job-description field)."""
+    extractor = _HTMLTextExtractor()
+    try:
+        extractor.feed(fragment)
+    except Exception:  # malformed markup: fall back to a crude tag strip
+        return re.sub(r"<[^>]+>", " ", fragment)
+    return "\n".join(extractor.parts)
+
+
+def _iter_jsonld_objects(data):
+    """Yield every dict in a JSON-LD blob, walking @graph and lists."""
+    if isinstance(data, dict):
+        graph = data.get("@graph")
+        if isinstance(graph, list):
+            for item in graph:
+                yield from _iter_jsonld_objects(item)
+        yield data
+    elif isinstance(data, list):
+        for item in data:
+            yield from _iter_jsonld_objects(item)
+
+
+def _jsonld_location(loc) -> str:
+    """Turn a schema.org jobLocation (dict or list) into a short location string."""
+    if isinstance(loc, list):
+        return ", ".join(filter(None, (_jsonld_location(item) for item in loc)))
+    if isinstance(loc, dict):
+        addr = loc.get("address", loc)
+        if isinstance(addr, dict):
+            bits = [addr.get("addressLocality"), addr.get("addressRegion"), addr.get("addressCountry")]
+            return ", ".join(str(b) for b in bits if b)
+    return ""
+
+
+def _format_jobposting(obj: dict):
+    """Render a schema.org JobPosting object as readable text."""
+    parts = []
+    if obj.get("title"):
+        parts.append(f"Job title: {obj['title']}")
+    org = obj.get("hiringOrganization")
+    if isinstance(org, dict) and org.get("name"):
+        parts.append(f"Company: {org['name']}")
+    location = _jsonld_location(obj.get("jobLocation"))
+    if location:
+        parts.append(f"Location: {location}")
+    emp = obj.get("employmentType")
+    if emp:
+        parts.append(f"Employment type: {emp if isinstance(emp, str) else ', '.join(map(str, emp))}")
+    desc = obj.get("description")
+    if desc:
+        parts.append("")
+        parts.append(_html_to_text(desc))
+    result = "\n".join(parts).strip()
+    return result or None
+
+
+def _extract_jsonld_jobposting(html: str):
+    """Find a schema.org JobPosting embedded as JSON-LD (Greenhouse, Lever, LinkedIn, etc.)."""
+    for match in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.I | re.S
+    ):
+        try:
+            data = json.loads(match.group(1).strip())
+        except Exception:
+            continue
+        for obj in _iter_jsonld_objects(data):
+            types = obj.get("@type")
+            types = types if isinstance(types, list) else [types]
+            if any(str(t).lower() == "jobposting" for t in types):
+                formatted = _format_jobposting(obj)
+                if formatted:
+                    return formatted
+    return None
+
+
+def _fetch_workday_cxs(parsed, opener):
+    """Workday career sites are SPAs, but expose a JSON API (CXS) for each job.
+
+    Transform the human page URL to its /wday/cxs/<tenant>/<site>/job/... endpoint and read
+    the posting from JSON. Same host as the (already SSRF-validated) page, so no new host check.
+    """
+    host = parsed.hostname or ""
+    tenant = host.split(".")[0]
+    segments = [s for s in parsed.path.split("/") if s]
+    if "job" not in segments:
+        return None
+    job_idx = segments.index("job")
+    if job_idx < 1:
+        return None
+    site = segments[job_idx - 1]
+    job_path = "/".join(segments[job_idx:])
+    api_url = f"{parsed.scheme}://{host}/wday/cxs/{tenant}/{site}/{job_path}"
+    req = Request(api_url, headers={"User-Agent": _FETCH_USER_AGENT, "Accept": "application/json"})
+    try:
+        with opener.open(req, timeout=_FETCH_TIMEOUT) as resp:
+            if (getattr(resp, "status", None) or resp.getcode()) != 200:
+                return None
+            raw = resp.read(_FETCH_MAX_BYTES + 1)[:_FETCH_MAX_BYTES]
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+    info = data.get("jobPostingInfo") if isinstance(data, dict) else None
+    if not isinstance(info, dict):
+        return None
+    parts = []
+    if info.get("title"):
+        parts.append(f"Job title: {info['title']}")
+    if info.get("location"):
+        parts.append(f"Location: {info['location']}")
+    if info.get("timeType"):
+        parts.append(f"Time type: {info['timeType']}")
+    if info.get("startDate"):
+        parts.append(f"Posted: {info['startDate']}")
+    if info.get("jobDescription"):
+        parts.append("")
+        parts.append(_html_to_text(info["jobDescription"]))
+    result = "\n".join(parts).strip()
+    return result or None
+
+
+@tool
+def fetch_url(url: str) -> str:
+    """Fetch a web page (typically a job posting) and return its readable plain text.
+
+    Use this whenever the user shares a link to a job posting so you can tailor the CV and
+    Profile to the REAL posting. Returns the page text with scripts/styles removed, truncated
+    if very long. On failure returns a short string beginning with 'ERROR:' (e.g. blocked
+    host, HTTP error, or a page that needs login/JavaScript).
+    """
+    current = (url or "").strip()
+    if not current:
+        return "ERROR: no URL was provided."
+
+    class _NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None  # handle redirects manually so we re-check each hop for SSRF
+
+    opener = build_opener(_NoRedirect)
+
+    for _ in range(_FETCH_MAX_REDIRECTS + 1):
+        parsed = urlparse(current)
+        if parsed.scheme not in ("http", "https"):
+            return "ERROR: only http/https links are supported."
+        host = parsed.hostname
+        if not host or not _host_is_public(host):
+            return "ERROR: that link points to a non-public or unreachable host, so it was blocked."
+        req = Request(current, headers={"User-Agent": _FETCH_USER_AGENT,
+                                        "Accept": "text/html,application/xhtml+xml,*/*"})
+        try:
+            with opener.open(req, timeout=_FETCH_TIMEOUT) as resp:
+                status = getattr(resp, "status", None) or resp.getcode()
+                if status in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    if not location:
+                        return "ERROR: the page redirected without a destination."
+                    current = urljoin(current, location)
+                    continue
+                content_type = resp.headers.get("Content-Type", "")
+                raw = resp.read(_FETCH_MAX_BYTES + 1)
+        except HTTPError as exc:
+            return f"ERROR: the page returned HTTP {exc.code}."
+        except URLError as exc:
+            return f"ERROR: could not reach the page ({getattr(exc, 'reason', 'unknown error')})."
+        except Exception as exc:  # surface a clean message to the model instead of crashing
+            return f"ERROR: failed to fetch the page ({type(exc).__name__})."
+
+        raw = raw[:_FETCH_MAX_BYTES]
+        charset = "utf-8"
+        m = re.search(r"charset=([\w\-]+)", content_type, re.I)
+        if m:
+            charset = m.group(1)
+        try:
+            html = raw.decode(charset, errors="replace")
+        except LookupError:
+            html = raw.decode("utf-8", errors="replace")
+
+        if "html" in content_type.lower() or "<html" in html[:4000].lower():
+            is_html = True
+            visible = _clean_ws(_html_to_text(html))
+        else:
+            is_html = False
+            visible = _clean_ws(html)
+
+        # JavaScript-rendered career sites (Workday, Greenhouse, Lever, LinkedIn, ...) return
+        # a near-empty SPA shell to a plain HTTP fetch. Recover the real posting from
+        # structured sources that survive without a browser.
+        structured = None
+        if is_html:
+            structured = _extract_jsonld_jobposting(html)
+        if not structured and host.lower().endswith("myworkdayjobs.com"):
+            structured = _fetch_workday_cxs(parsed, opener)
+
+        result = _clean_ws(structured) if structured else visible
+        if not result or len(result) < 60:
+            return ("ERROR: that page needs JavaScript or a login to show the job (common on "
+                    "Workday, Greenhouse and similar career sites), so I couldn't read it. "
+                    "Please paste the job posting text and I'll tailor to it.")
+        if len(result) > _FETCH_MAX_CHARS:
+            result = result[:_FETCH_MAX_CHARS].rstrip() + "\n\n[...truncated...]"
+        return result
+
+    return "ERROR: the link redirected too many times."
+
+
+tools = [fetch_url]
 
 _INLINE_FUNCTION_NAMES = set()
 
