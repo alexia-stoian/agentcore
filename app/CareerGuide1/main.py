@@ -33,6 +33,9 @@ Switzerland.
 - Reassure, never pressure. If they're unsure, it's totally fine to skip or come back.
 
 # LANGUAGE
+- Always reply in the language given by the request `locale` field (en = English, de = German,
+  fr = French). Ignore the language of the user's message and of the conversation history when
+  choosing your reply language.
 - Reply in the user's language: German, French, or English (no Italian — the app
   doesn't support it).
 - The APP controls the language and gives you the current language each turn. Always
@@ -485,6 +488,25 @@ def _profile_preamble(payload):
     )
 
 
+_LOCALE_NAMES = {"en": "English", "de": "German", "fr": "French"}
+
+
+def _locale_preamble(payload):
+    """The app sends the chosen reply language in the request 'locale' field (en/de/fr)."""
+    locale = payload.get("locale") if isinstance(payload, dict) else None
+    if not isinstance(locale, str):
+        return None
+    code = locale.strip().lower()[:2]
+    name = _LOCALE_NAMES.get(code)
+    if not name:
+        return None
+    return (
+        f"SYSTEM: Reply ONLY in {name} (locale \"{code}\"). This is the language the user chose "
+        f"in the app. Ignore the language of the user's message and of the conversation history "
+        f"when choosing your reply language - always answer in {name}."
+    )
+
+
 def _status_label(payload):
     """Personalized, varied ephemeral label emitted BEFORE the model answers.
 
@@ -566,6 +588,14 @@ async def invoke(payload, context):
             prompt = _preamble + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
         elif isinstance(prompt, list):
             prompt = [{"role": "user", "content": [{"text": _preamble}]}] + prompt
+
+    # The app tells us which language to reply in via the request "locale" field (en/de/fr).
+    _locale = _locale_preamble(payload)
+    if _locale:
+        if isinstance(prompt, str):
+            prompt = _locale + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
+        elif isinstance(prompt, list):
+            prompt = [{"role": "user", "content": [{"text": _locale}]}] + prompt
 
     # Emit an ephemeral status bit FIRST - BEFORE the model starts producing - so the app can
     # show a "thinking" indicator during the wait and hide it as soon as the message streams.

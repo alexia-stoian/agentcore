@@ -74,6 +74,9 @@ than what the Profile provides, ask one short question. You may polish and rephr
 DO have, but never fabricate experience, qualifications, dates, or results.
 
 # LANGUAGE
+Always reply in the language given by the request `locale` field (en = English, de = German,
+fr = French). Ignore the language of the user's message and of the conversation history when
+choosing your reply language.
 Reply in the user's language: English, German, or French (no Italian). If the app switches
 the language mid-chat, continue in the new language. In structured objects, any "language"
 field uses "en" / "de" / "fr".
@@ -723,6 +726,25 @@ def _profile_preamble(payload):
     )
 
 
+_LOCALE_NAMES = {"en": "English", "de": "German", "fr": "French"}
+
+
+def _locale_preamble(payload):
+    """The app sends the chosen reply language in the request 'locale' field (en/de/fr)."""
+    locale = payload.get("locale") if isinstance(payload, dict) else None
+    if not isinstance(locale, str):
+        return None
+    code = locale.strip().lower()[:2]
+    name = _LOCALE_NAMES.get(code)
+    if not name:
+        return None
+    return (
+        f"SYSTEM: Reply ONLY in {name} (locale \"{code}\"). This is the language the user chose "
+        f"in the app. Ignore the language of the user's message and of the conversation history "
+        f"when choosing your reply language - always answer in {name}."
+    )
+
+
 def _handoff_context_preamble(payload):
     """Build a preamble from handoff_context the app forwards when another assistant routed the
     user here mid-conversation, so we DON'T re-ask for what they already shared (e.g. a job
@@ -818,6 +840,14 @@ async def invoke(payload, context):
             prompt = _handoff + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
         elif isinstance(prompt, list):
             prompt = [{"role": "user", "content": [{"text": _handoff}]}] + prompt
+
+    # The app tells us which language to reply in via the request "locale" field (en/de/fr).
+    _locale = _locale_preamble(payload)
+    if _locale:
+        if isinstance(prompt, str):
+            prompt = _locale + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
+        elif isinstance(prompt, list):
+            prompt = [{"role": "user", "content": [{"text": _locale}]}] + prompt
 
     # Emit an ephemeral status bit FIRST - BEFORE the model starts producing - so the app can
     # show a "thinking" indicator during the wait and hide it as soon as the message streams.
