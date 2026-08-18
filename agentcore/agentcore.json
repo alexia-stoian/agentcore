@@ -267,7 +267,26 @@
   "credentials": [],
   "evaluators": [],
   "onlineEvalConfigs": [],
-  "agentCoreGateways": [],
+  "agentCoreGateways": [
+    {
+      "name": "ProfileGateway",
+      "protocolType": "MCP",
+      "description": "Profile read/write tools backed by the mock profile store Lambda",
+      "targets": [
+        {
+          "name": "ProfileTools",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "arn:aws:lambda:eu-west-1:416754239521:function:demoAlexia-profile-tools",
+            "toolSchemaFile": "agentcore/profile-store/profile-tools-schema.json"
+          }
+        }
+      ],
+      "authorizerType": "AWS_IAM",
+      "enableSemanticSearch": true,
+      "exceptionLevel": "NONE"
+    }
+  ],
   "policyEngines": [],
   "configBundles": [],
   "abTests": [],

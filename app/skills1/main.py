@@ -8,6 +8,7 @@ from strands.agent.conversation_manager.null_conversation_manager import NullCon
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
 from mcp_client.client import get_streamable_http_mcp_client
+from mcp_client.gateway import ProfileUserIdInjector, get_profile_gateway_tools, set_current_user_id
 from memory.session import get_memory_session_manager
 
 app = BedrockAgentCoreApp()
@@ -124,8 +125,10 @@ Reply in the user's language: English, German, or French (no Italian). If the ap
 language mid-session, continue in the new language. Use "en" / "de" / "fr" if you include a
 "language" field.
 
-# THE USER'S PROFILE (context only)
-An invocation may include a "user_profile" object (profile + skills, etc.) for THIS signed-in
+# THE USER'S PROFILE (read it with your tool)
+You have a get_user_profile TOOL backed by the app's profile store: call it to read the user's
+saved profile (name, skills, etc.) and confirm the skill is one of theirs. You CANNOT change it.
+An invocation may also include a "user_profile" object (profile + skills, etc.) for THIS signed-in
 user. Use it for their name and to confirm the skill is one of theirs. Everything is scoped to this
 signed-in user, in a Swiss context. Never invent facts about the user.
 
@@ -214,7 +217,7 @@ feedback on question 5, then the final level, rationale and breakdown in "messag
 
 
 # Skills assessor uses no tools - it is a pure conversational agent.
-tools = []
+tools = get_profile_gateway_tools({"get_user_profile"})
 
 _INLINE_FUNCTION_NAMES = set()
 
@@ -238,7 +241,7 @@ def agent_factory():
                 # ourselves via stream_async, and printing emoji to a Windows cp1252
                 # console raises UnicodeEncodeError. None = no stdout printing.
                 callback_handler=None,
-                hooks=[
+                hooks=[ProfileUserIdInjector()
                 ],
             )
         return cache[key]
@@ -257,6 +260,17 @@ def _extract_prompt(payload: dict):
             "content": tr.get("content", []),
         }} for tr in payload["tool_results"]]}]
     return payload.get("prompt", "")
+
+
+def _user_id_preamble(payload):
+    """Tell the agent the signed-in user's id so it forwards userId to the profile tools."""
+    uid = payload.get("user_id") if isinstance(payload, dict) else None
+    if not uid:
+        return ""
+    return (
+        f'SYSTEM: The signed-in user id is "{uid}". When you call the get_user_profile '
+        f'or update_profile tools, always pass userId="{uid}".'
+    )
 
 
 def _profile_preamble(payload):
@@ -339,6 +353,10 @@ async def invoke(payload, context):
     agent = get_or_create_agent(session_id, user_id)
 
     prompt = _extract_prompt(payload)
+
+    # Bind the signed-in user's id for this turn; ProfileUserIdInjector stamps it onto
+    # every profile tool call so persistence never depends on the model passing it.
+    set_current_user_id(payload.get("user_id") if isinstance(payload, dict) else None)
     skill = payload.get("skill") if isinstance(payload, dict) else None
 
     # The app opens this chat when the user picks a skill on the /skills page, so the first

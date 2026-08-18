@@ -60,8 +60,22 @@
             "memoryArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:memory/demoAlexia_Skills1Memory-aI9cdUAxPC"
           }
         },
+        "mcp": {
+          "gateways": {
+            "ProfileGateway": {
+              "gatewayId": "demoalexia-profilegateway-wmvdtffllq",
+              "gatewayArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:gateway/demoalexia-profilegateway-wmvdtffllq",
+              "gatewayUrl": "https://demoalexia-profilegateway-wmvdtffllq.gateway.bedrock-agentcore.eu-west-1.amazonaws.com/mcp",
+              "targets": {
+                "ProfileTools": {
+                  "targetId": "YTAB7PZQ51"
+                }
+              }
+            }
+          }
+        },
         "stackName": "AgentCore-demoAlexia-default",
-        "deployHash": "1ef72f3c9cd327e4"
+        "deployHash": "d3cae5080843f2d4"
       }
     }
   }

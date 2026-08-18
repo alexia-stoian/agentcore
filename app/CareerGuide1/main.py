@@ -8,6 +8,7 @@ from strands.agent.conversation_manager.null_conversation_manager import NullCon
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
 from mcp_client.client import get_streamable_http_mcp_client
+from mcp_client.gateway import ProfileUserIdInjector, get_profile_gateway_tools, set_current_user_id
 from memory.session import get_memory_session_manager
 
 app = BedrockAgentCoreApp()
@@ -59,7 +60,11 @@ Switzerland.
 - Options must be relevant and adaptive: target-role options depend on the chosen sector/
   industry; role-preference options depend on the chosen role.
 
-# THE USER'S PROFILE (authoritative, re-sent every turn)
+# THE USER'S PROFILE (read + save it with your tools)
+You have two profile TOOLS backed by the app's profile store: get_user_profile (read what is
+already on file - call it before asking the user, especially at the start of onboarding) and
+update_profile (SAVE new or changed fields - pass only the changed ones; use it to persist each
+onboarding answer as you collect it). These tools are the source of truth for the profile.
 Each invocation may include a "user_profile" object (profile + preferences + qualifications)
 holding everything ALREADY saved for THIS signed-in user. When present it is the SINGLE
 SOURCE OF TRUTH, re-sent LIVE every turn, so it can change between turns — always use the
@@ -407,7 +412,7 @@ saved and they can always come back. Emit "handoff" ONLY on that switch turn, ne
 
 
 # Career Guide uses no tools \u2014 it is a pure conversational onboarding agent.
-tools = []
+tools = get_profile_gateway_tools({"get_user_profile", "update_profile"})
 
 _INLINE_FUNCTION_NAMES = set()
 
@@ -431,7 +436,7 @@ def agent_factory():
                 # ourselves via stream_async, and printing emoji to a Windows cp1252
                 # console raises UnicodeEncodeError. None = no stdout printing.
                 callback_handler=None,
-                hooks=[
+                hooks=[ProfileUserIdInjector()
                 ],
             )
         return cache[key]
@@ -473,6 +478,17 @@ def _is_inline_function_call(event: dict) -> bool:
     tool_use = start.get("toolUse") if isinstance(start, dict) else None
     return tool_use is not None and tool_use.get("name") in _INLINE_FUNCTION_NAMES
 
+
+
+def _user_id_preamble(payload):
+    """Tell the agent the signed-in user's id so it forwards userId to the profile tools."""
+    uid = payload.get("user_id") if isinstance(payload, dict) else None
+    if not uid:
+        return ""
+    return (
+        f'SYSTEM: The signed-in user id is "{uid}". When you call the get_user_profile '
+        f'or update_profile tools, always pass userId="{uid}".'
+    )
 
 
 def _profile_preamble(payload):
@@ -568,6 +584,10 @@ async def invoke(payload, context):
     agent = get_or_create_agent(session_id, user_id)
 
     prompt = _extract_prompt(payload)
+
+    # Bind the signed-in user's id for this turn; ProfileUserIdInjector stamps it onto
+    # every profile tool call so persistence never depends on the model passing it.
+    set_current_user_id(payload.get("user_id") if isinstance(payload, dict) else None)
 
     # The app opens this chat automatically when the user creates their account, before the
     # user has typed anything, so it may invoke us with an empty prompt or a "start" marker.

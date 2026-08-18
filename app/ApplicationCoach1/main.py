@@ -15,6 +15,7 @@ from strands.agent.conversation_manager.null_conversation_manager import NullCon
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
 from mcp_client.client import get_streamable_http_mcp_client
+from mcp_client.gateway import ProfileUserIdInjector, get_profile_gateway_tools, set_current_user_id
 from memory.session import get_memory_session_manager
 
 app = BedrockAgentCoreApp()
@@ -50,7 +51,10 @@ Reply in the user's language: English, German, or French (no Italian). If the ap
 the language mid-chat, continue in the new language. In structured objects, the "language"
 field uses "en" / "de" / "fr".
 
-# THE USER'S PROFILE (authoritative, re-sent every turn)
+# THE USER'S PROFILE (read it with your tool)
+You have a get_user_profile TOOL backed by the app's profile store: call it to read what is
+already on file instead of asking for things you can look up. You CANNOT change the profile
+(no write tool). This tool is the source of truth for the profile.
 Each invocation may include a "user_profile" object (profile + preferences + qualifications)
 holding everything already saved for THIS signed-in user. When present it is the SINGLE
 SOURCE OF TRUTH, re-sent LIVE every turn (it can change between turns — always use the
@@ -835,7 +839,7 @@ def fetch_url(url: str) -> str:
     return "ERROR: the link redirected too many times."
 
 
-tools = [fetch_url]
+tools = [fetch_url] + get_profile_gateway_tools({"get_user_profile"})
 
 _INLINE_FUNCTION_NAMES = set()
 
@@ -859,7 +863,7 @@ def agent_factory():
                 # ourselves via stream_async, and printing emoji to a Windows cp1252
                 # console raises UnicodeEncodeError. None = no stdout printing.
                 callback_handler=None,
-                hooks=[
+                hooks=[ProfileUserIdInjector()
                 ],
             )
         return cache[key]
@@ -901,6 +905,17 @@ def _is_inline_function_call(event: dict) -> bool:
     tool_use = start.get("toolUse") if isinstance(start, dict) else None
     return tool_use is not None and tool_use.get("name") in _INLINE_FUNCTION_NAMES
 
+
+
+def _user_id_preamble(payload):
+    """Tell the agent the signed-in user's id so it forwards userId to the profile tools."""
+    uid = payload.get("user_id") if isinstance(payload, dict) else None
+    if not uid:
+        return ""
+    return (
+        f'SYSTEM: The signed-in user id is "{uid}". When you call the get_user_profile '
+        f'or update_profile tools, always pass userId="{uid}".'
+    )
 
 
 def _profile_preamble(payload):
@@ -1021,6 +1036,10 @@ async def invoke(payload, context):
     agent = get_or_create_agent(session_id, user_id)
 
     prompt = _extract_prompt(payload)
+
+    # Bind the signed-in user's id for this turn; ProfileUserIdInjector stamps it onto
+    # every profile tool call so persistence never depends on the model passing it.
+    set_current_user_id(payload.get("user_id") if isinstance(payload, dict) else None)
 
     # If the app sent the authoritative user_profile, prepend it so the agent always works
     # from the latest saved profile (re-sent every turn) and never re-asks known info.

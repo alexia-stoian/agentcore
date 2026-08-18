@@ -1,0 +1,118 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Mock profile store for the AgentCore ProfileGateway demo. A DynamoDB table
+  keyed by userId plus a Lambda that implements the get_user_profile /
+  update_profile MCP tools invoked by the AgentCore Gateway (lambda-function-arn
+  target). Self-contained: delete this stack to remove everything.
+
+Resources:
+  ProfileTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: demoAlexia-profile-store
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+
+  ProfileToolRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: demoAlexia-profile-store-lambda
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: profile-table-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt ProfileTable.Arn
+
+  ProfileToolFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: demoAlexia-profile-tools
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt ProfileToolRole.Arn
+      Timeout: 15
+      MemorySize: 128
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ProfileTable
+      Code:
+        ZipFile: |
+          import os
+          import boto3
+
+          _table = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
+
+          # AgentCore Gateway passes the invoked tool name in the Lambda client
+          # context; it may be prefixed as "<target>___<tool>".
+          def _tool_name(event, context):
+              name = None
+              try:
+                  custom = (context.client_context.custom or {}) if context.client_context else {}
+                  name = custom.get("bedrockAgentCoreToolName")
+              except Exception:
+                  name = None
+              if not name and isinstance(event, dict):
+                  name = event.get("tool") or event.get("toolName")
+              if name and "___" in name:
+                  name = name.split("___")[-1]
+              return name
+
+          def _read(user_id):
+              item = _table.get_item(Key={"userId": user_id}).get("Item") or {}
+              return item.get("profile", {})
+
+          def handler(event, context):
+              event = event or {}
+              tool = _tool_name(event, context)
+              # The signed-in user id; in a real deploy this is injected from identity,
+              # not accepted from the model. Mock: fall back to a demo user.
+              user_id = event.get("userId") or "demo-user"
+
+              if tool == "get_user_profile":
+                  return {"userId": user_id, "profile": _read(user_id)}
+
+              if tool == "update_profile":
+                  fields = event.get("fields") or {}
+                  if not isinstance(fields, dict):
+                      return {"error": "fields must be an object of key/value updates"}
+                  profile = _read(user_id)
+                  profile.update({k: v for k, v in fields.items() if v is not None})
+                  _table.put_item(Item={"userId": user_id, "profile": profile})
+                  return {"userId": user_id, "profile": profile, "updated": list(fields.keys())}
+
+              return {"error": f"unknown tool: {tool!r}"}
+
+  # Let the AgentCore Gateway service invoke this Lambda (scoped to this account).
+  GatewayInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ProfileToolFunction
+      Action: lambda:InvokeFunction
+      Principal: bedrock-agentcore.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+Outputs:
+  ProfileToolFunctionArn:
+    Description: ARN to pass to `agentcore add gateway-target --lambda-arn`
+    Value: !GetAtt ProfileToolFunction.Arn
+  ProfileTableName:
+    Value: !Ref ProfileTable

@@ -1,0 +1,35 @@
+[
+  {
+    "name": "get_user_profile",
+    "description": "Return the signed-in user's saved profile (target role, seniority, industry, location, work model, skills, languages, and any other stored fields). Call this before asking the user for information you may already have. Pass userId when it is provided to you; otherwise the platform resolves the current user.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The signed-in user's id, if the platform provided one to you."
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "update_profile",
+    "description": "Persist changes to the signed-in user's profile. Pass only the fields that changed as key/value pairs; existing fields are kept. Use during onboarding to save answers, or later to edit the profile. Pass userId when it is provided to you.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The signed-in user's id, if the platform provided one to you."
+        },
+        "fields": {
+          "type": "object",
+          "description": "Map of profile fields to set/overwrite, e.g. {\"primaryRole\": \"Frontend Engineer\", \"location\": \"Zurich\", \"workModel\": \"hybrid\"}.",
+          "additionalProperties": true
+        }
+      },
+      "required": ["fields"]
+    }
+  }
+]
