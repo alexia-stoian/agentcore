@@ -749,7 +749,9 @@ def _profile_preamble(payload):
     return (
         "SYSTEM: AUTHORITATIVE user_profile for THIS signed-in user, re-sent live every turn. "
         "It is the single source of truth: use it directly, never ask for anything already "
-        "present in it, and always honor these latest values (they can change between turns).\n"
+        "present in it, and always honor these latest values (they can change between turns). "
+        "If you call update_profile this turn, its tool result is the LATEST saved profile - "
+        "trust that over this snapshot.\n"
         + json.dumps(user_profile, ensure_ascii=False)
     )
 
