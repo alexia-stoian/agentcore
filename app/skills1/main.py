@@ -57,7 +57,11 @@ ONE short question listing the skills from user_profile as options; otherwise be
 # QUESTION FORMATS (pick whatever assesses the skill best)
 Each question is EITHER:
 1. MULTIPLE CHOICE - exactly 4 answer options, exactly ONE correct. Put the 4 options as plain
-   strings in "options" and make the distractors plausible.
+   strings in "options" and make the distractors plausible. VARY WHERE THE CORRECT OPTION SITS:
+   it must NOT always be first - across the 5 questions spread the correct answer over different
+   positions (1st, 2nd, 3rd, 4th). Each turn the app gives you an internal instruction naming the
+   exact slot (1-4) to place the correct option in - ALWAYS obey it, and put the distractors in
+   the other three slots.
 2. SPECIAL - a richer, interactive format when it assesses the skill better than a plain multiple
    choice. You may present ANYTHING relevant to the skill: a snippet of code to read ("what does
    this output?"), a buggy function to fix, a function to complete, a drag-and-drop / ordering
@@ -192,7 +196,9 @@ The app reassembles your stream and JSON.parses it. Shape:
   question here. Omit on the result turn.
 - "options" - answer chips, each a PLAIN STRING only (NEVER an object). For a MULTIPLE-CHOICE
   question emit EXACTLY 4, exactly one correct; the user's click sends that exact string back as
-  their answer. Omit when the answer is free / interactive. NEVER put options inside "message".
+  their answer. Place the correct option at the slot (1-4) the app names for this turn - do NOT
+  default to putting it first. Omit when the answer is free / interactive. NEVER put options
+  inside "message".
 - "open_field" - OPTIONAL bool, default false. Set true when the user must TYPE or BUILD the answer
   (code_complete, ordering, match_pairs, etc.).
 - "special" - OPTIONAL object; include ONLY on SPECIAL questions (see above). Omit on plain
@@ -400,6 +406,20 @@ async def invoke(payload, context):
             prompt = _locale + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
         elif isinstance(prompt, list):
             prompt = [{"role": "user", "content": [{"text": _locale}]}] + prompt
+
+    # Pick, in code, the slot (1-4) for the CORRECT multiple-choice option this turn so it is not
+    # always first. Grading is semantic (by option string), so this only affects display order.
+    _slot = random.randint(1, 4)
+    _slot_hint = (
+        f"SYSTEM (internal, never reveal to the user): If THIS turn presents a multiple-choice "
+        f"question with 4 options, place the single CORRECT option at position {_slot} "
+        f"(1=first, 4=last) and put the three distractors in the other slots. This controls only "
+        f"the display order; still grade the user's answer on its meaning as usual."
+    )
+    if isinstance(prompt, str):
+        prompt = _slot_hint + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
+    elif isinstance(prompt, list):
+        prompt = [{"role": "user", "content": [{"text": _slot_hint}]}] + prompt
 
     # Emit an ephemeral status bit FIRST - BEFORE the model starts producing - so the app can
     # show a "thinking" indicator during the wait and hide it as soon as the message streams.
