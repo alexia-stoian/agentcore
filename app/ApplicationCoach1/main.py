@@ -15,7 +15,7 @@ from strands.agent.conversation_manager.null_conversation_manager import NullCon
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
 from mcp_client.client import get_streamable_http_mcp_client
-from mcp_client.gateway import ProfileUserIdInjector, get_profile_gateway_tools, set_current_user_id
+from mcp_client.gateway import ProfileUserIdInjector, fetch_user_profile, get_profile_gateway_tools, set_current_user_id
 from memory.session import get_memory_session_manager
 
 app = BedrockAgentCoreApp()
@@ -945,8 +945,11 @@ def _user_id_preamble(payload):
 
 
 def _profile_preamble(payload):
-    """Build an authoritative user_profile preamble from the payload, if the app sent one."""
+    """Authoritative user_profile preamble - from the payload if present, else read live from the
+    gateway EVERY turn so the profile is always in context, not just when the model calls a tool."""
     user_profile = payload.get("user_profile") if isinstance(payload, dict) else None
+    if not user_profile:
+        user_profile = fetch_user_profile(payload.get("user_id") if isinstance(payload, dict) else None)
     if not user_profile:
         return None
     return (

@@ -8,7 +8,9 @@ execution-role credentials. Returns [] when the gateway is not wired (e.g. local
 dev) or unreachable, so the agent degrades gracefully.
 """
 
+import json
 import os
+import uuid
 
 import botocore.session
 import httpx
@@ -68,6 +70,57 @@ def get_profile_gateway_tools(allowed: set[str]) -> list:
         return []
     # Gateway tool names are target-prefixed ("ProfileTools___get_user_profile").
     return [t for t in tools if str(getattr(t, "tool_name", "")).split("___")[-1] in allowed]
+
+
+_GET_PROFILE_TOOL = "ProfileTools___get_user_profile"
+
+
+def _profile_from_result(result):
+    """Extract the profile dict from an MCP tool result (text/json content blocks)."""
+    content = result.get("content") if isinstance(result, dict) else getattr(result, "content", None)
+    if not content:
+        return None
+    for block in content:
+        b = block if isinstance(block, dict) else {}
+        data = None
+        if isinstance(b.get("json"), (dict, list)):
+            data = b["json"]
+        elif isinstance(b.get("text"), str):
+            try:
+                data = json.loads(b["text"])
+            except Exception:  # noqa: BLE001
+                continue
+        if isinstance(data, dict):
+            if isinstance(data.get("profile"), dict):
+                return data["profile"] or None
+            if "userId" not in data and data:
+                return data
+    return None
+
+
+def fetch_user_profile(user_id):
+    """Read the user's profile from the gateway using a FRESH short-lived MCP session.
+
+    Deterministic per-turn read: it does not depend on the model calling the tool, and a new
+    session per call avoids a stale long-lived connection dropping the profile after turn 1.
+    Returns the profile dict, or None when the gateway is unavailable or the user has none.
+    """
+    url = os.getenv(_GATEWAY_URL_ENV)
+    if not url or not user_id:
+        return None
+    region = os.getenv("AWS_REGION") or "eu-west-1"
+    client = MCPClient(lambda: streamablehttp_client(url, auth=_SigV4Auth(_SERVICE, region)))
+    try:
+        with client:
+            result = client.call_tool_sync(
+                tool_use_id=f"profile-read-{uuid.uuid4().hex}",
+                name=_GET_PROFILE_TOOL,
+                arguments={"userId": user_id},
+            )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[profile-gateway] fetch_user_profile failed: {type(exc).__name__}: {exc}", flush=True)
+        return None
+    return _profile_from_result(result)
 
 
 # --- Deterministic userId injection: the model must not be relied on to pass it ---
