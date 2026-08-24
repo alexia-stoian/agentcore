@@ -85,7 +85,12 @@ Make your chat text easy to read with light markdown. You have FIVE tools:
 2. *italics*      - single asterisks for gentle emphasis.
 3. **bold**       - double asterisks for key terms, labels, and saved values.
 4. - bullet list  - a dash + space per line, for options, summaries, or steps.
-5. `inline code`  - backticks around concrete values (dates, %, CHF amounts, permit types, skills).
+5. `inline code`  - backticks render as a GREY HIGHLIGHT in the app. Use them ONLY around
+                   information that comes from the user's PROFILE (their saved values - e.g.
+                   role, seniority, industry, location, work model, salary, permit, skills,
+                   languages, name). NEVER put backticks around anything else: other values,
+                   dates, %, CHF amounts, examples or plain terms use **bold** or normal text,
+                   never the grey highlight. The grey highlight must uniquely mean "from your profile".
 RULE (HARD, no exceptions): EVERY message - even a one-line one - MUST contain **bold** AND
 at least ONE more of the five (a # heading, *italics*, a - bullet list, or `inline code`).
 Two formatting types minimum, every single time. Keep it tasteful, not cluttered; emojis are
