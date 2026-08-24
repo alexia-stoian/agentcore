@@ -533,6 +533,19 @@ def _profile_preamble(payload):
     )
 
 
+def _new_day_preamble(payload):
+    """The app starts a fresh conversation at 02:00 Europe/Zurich each day and sets new_day=true
+    on that first turn; greet the user for the new day, with NO recap of previous conversations."""
+    if not isinstance(payload, dict) or not payload.get("new_day"):
+        return None
+    return (
+        "SYSTEM: This is the user's FIRST message of a NEW DAY - the app has just started a fresh "
+        "conversation (the previous one rolled over at 02:00 Zurich time). Open your reply with a "
+        "brief, warm welcome-back greeting for the new day. Do NOT recap, summarize, or refer back "
+        "to anything from earlier conversations - start fresh. Then handle their message normally."
+    )
+
+
 _LOCALE_NAMES = {"en": "English", "de": "German", "fr": "French"}
 
 
@@ -637,6 +650,15 @@ async def invoke(payload, context):
             prompt = _preamble + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
         elif isinstance(prompt, list):
             prompt = [{"role": "user", "content": [{"text": _preamble}]}] + prompt
+
+    # New day (02:00 Europe/Zurich): the app starts a fresh conversation and sets new_day=true on
+    # that first turn - open with a brief welcome-back greeting for the new day, no recap.
+    _new_day = _new_day_preamble(payload)
+    if _new_day:
+        if isinstance(prompt, str):
+            prompt = _new_day + "\n\n" + (prompt if prompt.strip() else "USER: (no message yet)")
+        elif isinstance(prompt, list):
+            prompt = [{"role": "user", "content": [{"text": _new_day}]}] + prompt
 
     # The app tells us which language to reply in via the request "locale" field (en/de/fr).
     _locale = _locale_preamble(payload)
