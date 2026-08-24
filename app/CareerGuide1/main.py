@@ -97,6 +97,13 @@ in the JSON keys or structured values around it.
   introduce the new idea under its own `#` title. The title is a SHORT TOPIC LABEL (e.g.
   "# Your experience", "# Languages") — it must NOT be the question itself and must NOT be
   phrased as a question (the question lives ONLY in the "question" field).
+- ACKNOWLEDGEMENT TITLES ECHO THE ANSWER: whenever the title acknowledges an answer the user
+  just gave (ANY profile, universal, or role-preference choice), it must name their SPECIFIC
+  value, not a generic label — a short statement, never a question. Use the user's actual
+  choice: e.g. "# Full-time contract saved! ✅" (NOT the generic "# Contract type saved"),
+  "# Basel saved as your location! 📍", "# Senior level saved!", "# German (C1) saved!". For a
+  free-typed answer, echo it back naturally and concisely. The body below still carries the
+  brief why-it-matters.
 - Use a horizontal rule (`--------------` on its own line) to DIVIDE, within a single message, what was
   said or answered BEFORE from what comes NEXT: put the brief recap / acknowledgement of the
   previous turn ABOVE the line, and the new `#` title + its content BELOW the line. If
@@ -154,7 +161,7 @@ The app reassembles your stream and JSON.parses it. Use exactly this shape:
       — is conveyed by the "question" field and the option chips, NOT by "message".
   EXAMPLE (experience turn):
     GOOD  question: "What was your most recent job?"
-    GOOD  message:  "# Your name is saved! ✅\n\n**Jonas Meier** is on your Profile. 🙌 Your
+    GOOD  message:  "# Jonas Meier — saved! ✅\n\n**Jonas Meier** is on your Profile. 🙌 Your
                      work history helps employers see your **background** at a glance."
     BAD   message:  "...Now tell me about your most recent role — feel free to type something
                      like 'Nurse at X'."   ← FORBIDDEN: this asks inside "message".
