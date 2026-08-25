@@ -8,7 +8,7 @@ import re
 import socket
 import ipaddress
 from html.parser import HTMLParser
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, urlencode
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.error import URLError, HTTPError
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
@@ -215,6 +215,21 @@ present but its text isn't:
   posting text so you can tailor tightly.
 - Only fetch the posting for THIS job; don't fetch unrelated URLs.
 
+# COMMUTE (train & car) - you CAN compute this
+You have a `commute_times` tool that returns how long it takes to get from the user's home
+location to THIS job's location, BY TRAIN (Swiss SBB timetable) AND BY CAR. Use it whenever the
+user asks about the commute / how far it is / how long to get there, or when it's clearly
+relevant to whether this job fits their life:
+- ORIGIN = the user's location, taken from their PROFILE (preferredLocation, or their city).
+  DESTINATION = THIS job's location, taken from the posting.
+- Call `commute_times(origin, destination)` with those two place names. Do NOT emit any message
+  text on the turn you call the tool - just call it; your single JSON reply comes after it
+  returns. Then present BOTH the train time and the car time clearly in "message".
+- NEVER invent or guess commute times - ALWAYS use the tool. If it returns an "ERROR:" or can't
+  compute one of the two, say so briefly and give the one that worked.
+- If the user's location isn't in their profile, or the job's location isn't in the posting,
+  ask ONE short question for the missing one before computing.
+
 # CHOOSING A MODE (the USER triggers it by what they say)
 There is no app-supplied path: the user activates a mode by what they say. The moment their
 message points to one of your jobs FOR THIS POSTING, START that mode INSTANTLY - do NOT ask
@@ -224,9 +239,11 @@ message points to one of your jobs FOR THIS POSTING, START that mode INSTANTLY -
 - "tailor my CV" / "does my CV fit" / "optimise my CV for this" / CV questions -> CV TAILORING.
 - A question about the posting, role, company, requirements, or how to stand out -> answer it
   directly (Q&A), grounded in the posting.
+- "how far is it" / "commute" / "how long to get there" -> use the commute_times tool (see COMMUTE).
 - If they open vaguely, send one short, warm plain chat turn that names what you can do FOR THIS
   JOB, with options ["Tailor my CV", "Write a cover letter", "Practise the interview",
-  "Ask about the job"] and open_field true - but the instant they point at one, jump straight in.
+  "Ask about the job", "Check the commute"] and open_field true - but the instant they point at
+  one, jump straight in.
 
 ########################################################################################
 # COVER LETTER MODE (tailored to THIS job)
@@ -612,7 +629,96 @@ def fetch_url(url: str) -> str:
     return "ERROR: the link redirected too many times."
 
 
-tools = [fetch_url]
+# --- Commute tool: train time via the free Swiss transport (SBB) API + car time via OSRM -----
+_TRANSPORT_API = "https://transport.opendata.ch/v1/connections"
+_OSRM_API = "https://router.project-osrm.org/route/v1/driving"
+_COMMUTE_TIMEOUT = 12
+
+
+def _commute_http_json(url):
+    req = Request(url, headers={"User-Agent": _FETCH_USER_AGENT, "Accept": "application/json"})
+    with build_opener().open(req, timeout=_COMMUTE_TIMEOUT) as resp:
+        return json.loads(resp.read(1_000_000).decode("utf-8", errors="replace"))
+
+
+def _parse_transport_duration(dur):
+    """transport.opendata.ch duration looks like '00d02:15:00' -> total minutes."""
+    try:
+        days, rest = str(dur).split("d")
+        h, m, _s = rest.split(":")
+        return int(days) * 1440 + int(h) * 60 + int(m)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _fmt_minutes(mins):
+    h, m = divmod(int(mins), 60)
+    return f"{h}h {m:02d}min" if h else f"{m}min"
+
+
+@tool
+def commute_times(origin: str, destination: str) -> str:
+    """Commute from origin to destination by TRAIN (Swiss SBB timetable via the free
+    transport.opendata.ch API) and by CAR (OSRM driving route). Pass place names - the user's
+    location (from their profile) as origin and the job's location (from the posting) as
+    destination. Returns a short readable summary of both, or a line starting with 'ERROR:'."""
+    origin = (origin or "").strip()
+    destination = (destination or "").strip()
+    if not origin or not destination:
+        return "ERROR: need both the user's location and the job's location."
+    lines = [f"Commute from {origin} to {destination}:"]
+    from_coord = to_coord = None
+
+    # TRAIN - SBB timetable via transport.opendata.ch (free, no key)
+    try:
+        q = urlencode({"from": origin, "to": destination, "limit": "1"})
+        data = _commute_http_json(f"{_TRANSPORT_API}?{q}")
+        conns = data.get("connections") or []
+        if conns:
+            c = conns[0]
+            mins = _parse_transport_duration(c.get("duration", ""))
+            frm = (c.get("from") or {}).get("station", {}) or {}
+            to = (c.get("to") or {}).get("station", {}) or {}
+            from_coord, to_coord = frm.get("coordinate") or {}, to.get("coordinate") or {}
+            transfers = c.get("transfers")
+            if transfers == 0:
+                xfer = ", direct"
+            elif transfers:
+                xfer = f", {transfers} change(s)"
+            else:
+                xfer = ""
+            if mins is not None:
+                lines.append(f"- Train: ~{_fmt_minutes(mins)}{xfer} ({frm.get('name', origin)} -> {to.get('name', destination)}).")
+            else:
+                lines.append("- Train: a connection was found but its duration couldn't be read.")
+        else:
+            lines.append("- Train: no connection found for those locations.")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"- Train: unavailable right now ({type(exc).__name__}).")
+
+    # CAR - OSRM driving route, reusing the station coordinates from the train lookup
+    try:
+        if from_coord and to_coord and from_coord.get("x") and to_coord.get("x"):
+            lon1, lat1 = from_coord["y"], from_coord["x"]
+            lon2, lat2 = to_coord["y"], to_coord["x"]
+            data = _commute_http_json(f"{_OSRM_API}/{lon1},{lat1};{lon2},{lat2}?overview=false")
+            routes = data.get("routes") or []
+            if routes and routes[0].get("duration"):
+                mins = int(round(routes[0]["duration"] / 60))
+                dist = routes[0].get("distance")
+                km = f", ~{dist/1000:.0f} km" if dist else ""
+                lines.append(f"- Car: ~{_fmt_minutes(mins)}{km} (driving, no traffic).")
+            else:
+                lines.append("- Car: no driving route found.")
+        else:
+            lines.append("- Car: skipped (couldn't resolve coordinates for driving).")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"- Car: unavailable right now ({type(exc).__name__}).")
+
+    return "\n".join(lines)
+
+
+tools = [fetch_url, commute_times]
 
 _INLINE_FUNCTION_NAMES = set()
 
