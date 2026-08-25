@@ -28,6 +28,11 @@
             "runtimeArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:runtime/demoAlexia_CareerGuide1-jMFoYcBNn6",
             "roleArn": "arn:aws:iam::416754239521:role/AgentCore-demoAlexia-defa-ApplicationAgentCareerGui-wPFBW6BKsUES"
           },
+          "Jobs1": {
+            "runtimeId": "demoAlexia_Jobs1-g4mNXlGan9",
+            "runtimeArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:runtime/demoAlexia_Jobs1-g4mNXlGan9",
+            "roleArn": "arn:aws:iam::416754239521:role/AgentCore-demoAlexia-defa-ApplicationAgentJobs1Runt-2TWHjbU5Mtiv"
+          },
           "CareerGuide": {
             "runtimeId": "demoAlexia_CareerGuide-uWzBUx4Fi8",
             "runtimeArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:runtime/demoAlexia_CareerGuide-uWzBUx4Fi8",
@@ -58,6 +63,10 @@
           "Skills1Memory": {
             "memoryId": "demoAlexia_Skills1Memory-aI9cdUAxPC",
             "memoryArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:memory/demoAlexia_Skills1Memory-aI9cdUAxPC"
+          },
+          "Jobs1Memory": {
+            "memoryId": "demoAlexia_Jobs1Memory-G0gAKuDiiD",
+            "memoryArn": "arn:aws:bedrock-agentcore:eu-west-1:416754239521:memory/demoAlexia_Jobs1Memory-G0gAKuDiiD"
           }
         },
         "mcp": {
@@ -75,7 +84,7 @@
           }
         },
         "stackName": "AgentCore-demoAlexia-default",
-        "deployHash": "d3cae5080843f2d4"
+        "deployHash": "0d5d50a8ccf8fddd"
       }
     }
   }
