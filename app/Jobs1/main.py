@@ -6,6 +6,8 @@ import json
 import random
 import re
 import socket
+import os
+import threading
 import ipaddress
 from html.parser import HTMLParser
 from urllib.parse import urlparse, urljoin, urlencode
@@ -413,6 +415,108 @@ _FETCH_MAX_REDIRECTS = 3
 _FETCH_USER_AGENT = "Mozilla/5.0 (compatible; SwissJobCoachBot/1.0)"
 
 
+# --- Managed-browser fallback: read JS-rendered pages a plain fetch can't (jobs.ch, ...) ---
+# Uses the AgentCore Browser tool (managed headless Chromium) driven over CDP via a plain
+# WebSocket - no Playwright/node subprocess, which the locked-down runtime FS cannot exec.
+_BROWSER_JOIN_TIMEOUT = 60        # hard cap on the whole render, seconds
+_BROWSER_SETTLE_SECONDS = 20      # budget to let a SPA finish loading its content
+_BROWSER_MIN_TEXT = 200           # minimum visible chars to treat the render as real
+
+
+def _render_with_browser(url: str) -> str:
+    """Render a page in the AgentCore managed browser and return its visible text.
+
+    Drives the managed Chromium over the Chrome DevTools Protocol through a raw WebSocket,
+    in its own thread. Returns '' on any failure so the caller can fall back to an ERROR.
+    """
+    box = {"text": ""}
+
+    def _run():
+        try:
+            import json as _json
+            import ssl as _ssl
+            import time as _time
+            import websocket  # websocket-client: pure Python, no subprocess
+            from bedrock_agentcore.tools.browser_client import browser_session
+        except Exception as exc:
+            log.warning("browser render unavailable: %s", type(exc).__name__)
+            return
+        region = (os.environ.get("AWS_REGION")
+                  or os.environ.get("AWS_DEFAULT_REGION") or "eu-west-1")
+        try:
+            with browser_session(region) as bclient:
+                ws_url, headers = bclient.generate_ws_headers()
+                auth = [f"{k}: {v}" for k, v in headers.items()
+                        if k.lower() in ("authorization", "x-amz-date", "x-amz-security-token")]
+                ws = websocket.create_connection(
+                    ws_url, header=auth, host=headers.get("Host"),
+                    timeout=20, suppress_origin=True, enable_multithread=True,
+                    sslopt={"cert_reqs": _ssl.CERT_REQUIRED},
+                )
+                seq = {"n": 0}
+
+                def cmd(method, params=None, session=None, read_timeout=20):
+                    seq["n"] += 1
+                    mid = seq["n"]
+                    payload = {"id": mid, "method": method, "params": params or {}}
+                    if session:
+                        payload["sessionId"] = session
+                    ws.send(_json.dumps(payload))
+                    end = _time.monotonic() + read_timeout
+                    while _time.monotonic() < end:
+                        ws.settimeout(max(1.0, end - _time.monotonic()))
+                        data = _json.loads(ws.recv())
+                        if data.get("id") == mid:
+                            return data
+                    return {}
+
+                try:
+                    tgt = cmd("Target.createTarget", {"url": "about:blank"})
+                    target_id = tgt.get("result", {}).get("targetId")
+                    if not target_id:
+                        return
+                    att = cmd("Target.attachToTarget", {"targetId": target_id, "flatten": True})
+                    session = att.get("result", {}).get("sessionId")
+                    if not session:
+                        return
+                    cmd("Page.navigate", {"url": url}, session=session)
+                    deadline = _time.monotonic() + _BROWSER_SETTLE_SECONDS
+                    last, stable, text = -1, 0, ""
+                    while _time.monotonic() < deadline:
+                        _time.sleep(1.2)
+                        ev = cmd(
+                            "Runtime.evaluate",
+                            {"expression": "document.body ? document.body.innerText : ''",
+                             "returnByValue": True},
+                            session=session,
+                        )
+                        text = ev.get("result", {}).get("result", {}).get("value") or ""
+                        if len(text) > _BROWSER_MIN_TEXT and len(text) == last:
+                            stable += 1
+                            if stable >= 2:
+                                break
+                        else:
+                            stable = 0
+                        last = len(text)
+                    box["text"] = text
+                    try:
+                        cmd("Target.closeTarget", {"targetId": target_id}, read_timeout=5)
+                    except Exception:
+                        pass
+                finally:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+        except Exception as exc:
+            log.warning("browser render failed for %s: %s", url, type(exc).__name__)
+
+    thread = threading.Thread(target=_run, name="browser-render", daemon=True)
+    thread.start()
+    thread.join(timeout=_BROWSER_JOIN_TIMEOUT)
+    return box.get("text", "") or ""
+
+
 def _host_is_public(hostname: str) -> bool:
     """SSRF guard: resolve the host and require every resolved IP to be public."""
     try:
@@ -670,15 +774,20 @@ def fetch_url(url: str) -> str:
                 len(html) > 50000 and len(visible) < max(4000, int(len(html) * 0.03))
             )
             if is_job_board_spa or looks_like_shell:
-                return (
-                    f"ERROR: {host} returned only its JavaScript app shell (navigation and "
-                    "menus) with NO job listings or posting text - a plain fetch cannot read "
-                    "this site. You received NO listings, NO job counts, NO companies, NO "
-                    "salaries. Do NOT invent or present any listings, numbers, roles, or a "
-                    "'jobs found' result, and emit NO sources for it. Tell the user you cannot "
-                    "read live listings from this site and ask them to paste the specific job "
-                    "posting text or share a direct posting URL."
-                )
+                rendered = _clean_ws(_render_with_browser(current))
+                if rendered and len(rendered) >= 200:
+                    result = rendered
+                else:
+                    return (
+                        f"ERROR: {host} returned only its JavaScript app shell (navigation "
+                        "and menus) and a browser render could not retrieve the listings "
+                        "either (the site may need a login, block automation, or show a "
+                        "CAPTCHA). You received NO listings, NO job counts, NO companies, NO "
+                        "salaries. Do NOT invent or present any listings, numbers, roles, or "
+                        "a 'jobs found' result, and emit NO sources for it. Tell the user you "
+                        "could not read live listings from this site and ask them to paste "
+                        "the specific job posting text or share a direct posting URL."
+                    )
         if not result or len(result) < 60:
             return ("ERROR: that page needs JavaScript or a login to show the job (common on "
                     "Workday, Greenhouse and similar career sites), so I couldn't read it. "

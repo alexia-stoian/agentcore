@@ -113,6 +113,29 @@ export class AgentCoreStack extends Stack {
     }
     this.application = new AgentCoreApplication(this, 'Application', appProps as any);
 
+    // Grant the AgentCore Browser tool (managed headless Chromium) to the agents that fall
+    // back to it when a plain fetch only returns a JavaScript app shell (jobs.ch, jobup.ch
+    // and other JS-rendered job pages). Scoped to these agents; resource '*' because browser
+    // sessions are ephemeral and the system browser id (aws.browser.v1) is AWS-owned.
+    const BROWSER_TOOL_AGENTS = ['CVBuilder1', 'ApplicationCoach1', 'Jobs1'];
+    for (const agentName of BROWSER_TOOL_AGENTS) {
+      const env = this.application.environments.get(agentName);
+      if (!env) continue;
+      env.runtime.role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: [
+            'bedrock-agentcore:StartBrowserSession',
+            'bedrock-agentcore:StopBrowserSession',
+            'bedrock-agentcore:GetBrowserSession',
+            'bedrock-agentcore:ListBrowserSessions',
+            'bedrock-agentcore:ConnectBrowserAutomationStream',
+            'bedrock-agentcore:UpdateBrowserStream',
+          ],
+          resources: ['*'],
+        })
+      );
+    }
+
     // Create AgentCoreMcp if there are gateways configured
     if (mcpSpec?.agentCoreGateways && mcpSpec.agentCoreGateways.length > 0) {
       new AgentCoreMcp(this, 'Mcp', {
