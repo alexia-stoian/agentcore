@@ -299,8 +299,13 @@ can show its source UI. Rules:
 - SILENT: put NOTHING about sources in the visible "message" (no [1] markers, no "Source:" lines).
   The frontend flags the paragraph and lists all the resources at the end.
 - If several paragraphs draw on sites, add one entry each; the frontend aggregates them.
-- NEVER invent a source or cite a page you didn't actually fetch. Omit "sources" entirely on
-  turns where you used no external-site info (e.g. advice from your own knowledge).
+- ONLY cite a page `fetch_url` ACTUALLY returned real content for this turn. A fetch that returns
+  an "ERROR:" (or an empty / JavaScript-shell page) gave you NOTHING: do NOT cite it, and do NOT
+  claim you "pulled", "fetched", "retrieved", or "found live" anything from it. NEVER invent
+  listings, counts (e.g. "94 jobs"), salaries, or facts a page did not actually return.
+- If your fetches failed and you're answering from your own general knowledge, SAY SO honestly
+  (e.g. "based on general Swiss market knowledge") and do NOT present it as live/current data;
+  emit NO "sources". Omit "sources" entirely whenever you used no successfully-fetched site.
 
 ########################################################################################
 # TAKING ACTION - actually rewriting the Profile / CV
@@ -721,6 +726,26 @@ def fetch_url(url: str) -> str:
             structured = _fetch_workday_cxs(parsed, opener)
 
         result = _clean_ws(structured) if structured else visible
+        if not structured and is_html:
+            host_l = (host or "").lower()
+            is_job_board_spa = any(
+                marker in host_l
+                for marker in ("jobs.ch", "jobup.ch", "indeed.", "linkedin.com",
+                               "glassdoor.", "monster.")
+            )
+            looks_like_shell = (
+                len(html) > 50000 and len(visible) < max(4000, int(len(html) * 0.03))
+            )
+            if is_job_board_spa or looks_like_shell:
+                return (
+                    f"ERROR: {host} returned only its JavaScript app shell (navigation and "
+                    "menus) with NO job listings or posting text - a plain fetch cannot read "
+                    "this site. You received NO listings, NO job counts, NO companies, NO "
+                    "salaries. Do NOT invent or present any listings, numbers, roles, or a "
+                    "'jobs found' result, and emit NO sources for it. Tell the user you cannot "
+                    "read live listings from this site and ask them to paste the specific job "
+                    "posting text or share a direct posting URL."
+                )
         if not result or len(result) < 60:
             return ("ERROR: that page needs JavaScript or a login to show the job (common on "
                     "Workday, Greenhouse and similar career sites), so I couldn't read it. "
