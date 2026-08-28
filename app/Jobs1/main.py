@@ -139,6 +139,8 @@ NEVER wrap your reply in ```json ... ``` or any triple-backtick fence - output n
 Even long content (a full tailored CV, a cover letter) MUST stay INSIDE the "message" string as
 properly escaped text (use \\n for line breaks) - NEVER break out of the JSON to write raw
 markdown and never resume JSON keys after prose; the ENTIRE reply is ONE JSON object, `{` to `}`.
+KEEP "message" FOCUSED: don't re-print an entire CV the app already has - give targeted,
+sectioned changes (which bullets or keywords to add/reword) instead of reproducing the whole CV.
 CRITICAL: whenever you ask the user anything, the question goes ONLY in the "question" field -
 NEVER in "message". "message" is statements only and must contain NO question mark ("?") aimed
 at the user. Never ask the same thing in both places.
@@ -1079,6 +1081,88 @@ def _status_label(payload):
     return random.choice(pool)
 
 
+# --- Envelope safety net: the frontend JSON.parses our reply; a malformed one would dump raw
+# --- markdown (or a leaked question) into chat. Buffer the model's output and emit ONE valid
+# --- JSON object no matter what, so a contract slip can never reach the user as broken output.
+def _escape_ctrl_in_json_strings(raw: str) -> str:
+    out = []
+    in_str = False
+    esc = False
+    for ch in raw:
+        if in_str:
+            if esc:
+                out.append(ch); esc = False; continue
+            if ch == "\\":
+                out.append(ch); esc = True; continue
+            if ch == '"':
+                out.append(ch); in_str = False; continue
+            code = ord(ch)
+            if code < 0x20:
+                out.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}.get(ch, f"\\u{code:04x}"))
+                continue
+            out.append(ch); continue
+        if ch == '"':
+            in_str = True
+        out.append(ch)
+    return "".join(out)
+
+
+def _iter_balanced_json_objects(raw: str):
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(raw):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    yield raw[start:i + 1]
+                    start = -1
+
+
+def _finalize_envelope(text: str) -> str:
+    """Return a guaranteed-valid single JSON object string for the frontend."""
+    s = (text or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z0-9]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s).strip()
+    if s:
+        for candidate in (s, _escape_ctrl_in_json_strings(s)):
+            try:
+                if isinstance(json.loads(candidate), dict):
+                    return candidate
+            except Exception:
+                pass
+        for cand in _iter_balanced_json_objects(s):
+            try:
+                obj = json.loads(_escape_ctrl_in_json_strings(cand))
+            except Exception:
+                continue
+            if isinstance(obj, dict) and ("message" in obj or "status" in obj):
+                return json.dumps(obj, ensure_ascii=False)
+        # Looks like an envelope but strict parse failed (e.g. an unescaped quote in the
+        # message) - pass it through UNCHANGED so the frontend's lenient parser still pulls out
+        # message/question, instead of nesting the whole thing inside another message.
+        if s.startswith("{") and re.search(r'"(?:message|status|question)"\s*:', s):
+            return s
+    return json.dumps({"status": "Done", "message": s}, ensure_ascii=False)
+
+
 @app.entrypoint
 async def invoke(payload, context):
     log.info("Invoking Agent.....")
@@ -1133,15 +1217,30 @@ async def invoke(payload, context):
     # show a "thinking" indicator during the wait and hide it as soon as the message streams.
     yield {"status_event": _status_label(payload)}
 
+    # Buffer the model's streamed text and emit ONE validated envelope at the end (the frontend
+    # buffers the whole reply anyway), so a malformed JSON reply can never reach the user as raw
+    # markdown or a question leaked into the chat text.
+    _final_text = ""
+    _current = ""
     async for event in agent.stream_async(
         prompt,
     ):
         if not isinstance(event, dict) or "event" not in event:
             continue
-        cbs = event["event"].get("contentBlockStart")
-        if cbs is not None and not cbs.get("start"):
+        ev = event["event"]
+        if "messageStart" in ev:
+            if _current.strip():
+                _final_text = _current
+            _current = ""
             continue
-        yield event
+        delta = (ev.get("contentBlockDelta") or {}).get("delta") or {}
+        piece = delta.get("text")
+        if isinstance(piece, str):
+            _current += piece
+    if _current.strip():
+        _final_text = _current
+    yield {"event": {"contentBlockDelta": {"delta": {"text": _finalize_envelope(_final_text)},
+                                           "contentBlockIndex": 0}}}
 
 
 if __name__ == "__main__":
