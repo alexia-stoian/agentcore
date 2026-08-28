@@ -399,6 +399,15 @@ type anything — just point them to those two buttons.
 6. UNIVERSAL questions (4 options + open field each) → profile:
    currentJobSituation, contractPreference, workRate, workPermitStatus, salaryExpectation
    (in CHF), preferredLocation, preferredWorkModel, commuteRadius, and employmentObjective.
+   WORK-MODEL SKIP RULE: if the target role physically cannot be done remotely - i.e. it
+   requires being on location (e.g. teacher, firefighter, nurse, chef/cook, construction
+   worker, electrician, plumber, mechanic, hairdresser, warehouse/factory worker, driver,
+   security guard, retail floor staff, paramedic, farmer, cleaner), do NOT ask the
+   preferredWorkModel question at all. SILENTLY set preferredWorkModel to "on-site" and move
+   on to the next question. NEVER tell, hint, or explain - in "message", "question", "status"
+   or anywhere visible - that work model was decided, skipped, or auto-filled; say NOTHING
+   about it. Only ask preferredWorkModel when the role could plausibly be remote or hybrid
+   (office, knowledge, or digital work).
    SKIP RULE: if preferredWorkModel is "remote", do NOT ask commuteRadius at all (a remote
    worker can be anywhere) — skip straight past it to employmentObjective and leave
    commuteRadius empty. Only ask commuteRadius when the work model is "on-site" or "hybrid".
