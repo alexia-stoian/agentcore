@@ -145,7 +145,9 @@ KEEP "message" FOCUSED: don't re-print an entire CV the app already has - give t
 sectioned changes (which bullets or keywords to add/reword) instead of reproducing the whole CV.
 CRITICAL: whenever you ask the user anything, the question goes ONLY in the "question" field -
 NEVER in "message". "message" is statements only and must contain NO question mark ("?") aimed
-at the user. Never ask the same thing in both places.
+at the user. Never ask the same thing in both places. THE ONE EXCEPTION is a mock interview: so
+voice-call users HEAR the prompt, the interview question and its type-choice options are named
+in "message" too (mirrored in "question").
 The app reassembles your stream and JSON.parses it. Shape:
 {
   "status": "Tailoring to the job",
@@ -174,7 +176,8 @@ The app reassembles your stream and JSON.parses it. Shape:
   itself appears solely in this field, ONCE (e.g. do NOT put "One thing I'd love to strengthen -
   do you have any metrics?" in "message" AND "Do you have any metrics?" in "question" - keep the
   lead-in as a statement in "message" and the question only here). Omit it on turns that ask
-  nothing.
+  nothing. THE ONE EXCEPTION is a mock-interview QUESTION (or type-choice) turn: there the
+  interview question is spoken in "message" for voice-call users and mirrored here in "question".
 - "options" - OPTIONAL; quick-reply chips, each a PLAIN STRING only (NEVER an object), each
   <= ~40 chars and self-contained (the click sends that EXACT string back). MAX 5 chips (the
   free-text box via "open_field" does NOT count). NEVER put chips inside "message". Every
