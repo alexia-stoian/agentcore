@@ -1221,10 +1221,6 @@ async def invoke(payload, context):
         elif isinstance(prompt, list):
             prompt = [{"role": "user", "content": [{"text": _locale}]}] + prompt
 
-    # Emit an ephemeral status bit FIRST - BEFORE the model starts producing - so the app can
-    # show a "thinking" indicator during the wait and hide it as soon as the message streams.
-    yield {"status_event": _status_label(payload)}
-
     # Buffer the model's streamed text and emit ONE validated envelope at the end (the frontend
     # buffers the whole reply anyway), so a malformed JSON reply can never reach the user as raw
     # markdown or a question leaked into the chat text.

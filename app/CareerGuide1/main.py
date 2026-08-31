@@ -689,10 +689,6 @@ async def invoke(payload, context):
         elif isinstance(prompt, list):
             prompt = [{"role": "user", "content": [{"text": _locale}]}] + prompt
 
-    # Emit an ephemeral status bit FIRST - BEFORE the model starts producing - so the app can
-    # show a "thinking" indicator during the wait and hide it as soon as the message streams.
-    yield {"status_event": _status_label(payload)}
-
     async for event in agent.stream_async(
         prompt,
     ):
